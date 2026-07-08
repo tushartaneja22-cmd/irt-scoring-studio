@@ -1,0 +1,25 @@
+# ---- NEVER commit data (student responses, item banks, results) ----
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+*.tsv
+*.json
+*.txt
+!requirements.txt
+
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+
+# ---- Streamlit secrets ----
+.streamlit/secrets.toml
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+~$*
