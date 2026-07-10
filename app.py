@@ -11,6 +11,7 @@ Heavy IRT calibration + WLE scoring runs ONCE (cached); changing Mean/SD
 re-scales instantly.
 """
 
+import importlib
 import io
 import os
 import tempfile
@@ -20,6 +21,8 @@ import pandas as pd
 import streamlit as st
 
 import irt_pipeline as engine
+importlib.reload(engine)  # always load the latest engine from disk, even after a hot-reload
+                          # (prevents a stale cached module after a git redeploy)
 
 # ----------------------------------------------------------------------
 # Page setup + styling
