@@ -106,6 +106,7 @@ def run_engine(file_bytes: bytes, file_name: str, sheet: str, free_math_c: bool 
         free_mask = (item_subject == "Math") if free_math_c else None
         a, b, c, se, n_adm, it, conv = engine.calibrate(resp, mask, verbose=False, free_c_mask=free_mask)
         scored = engine.score_students(resp, mask, item_subject, a, b, c, subjects)
+        diag = engine.compute_diagnostics(resp, mask, item_subject, a, b, c, subjects)
     finally:
         os.unlink(path)
 
@@ -118,24 +119,32 @@ def run_engine(file_bytes: bytes, file_name: str, sheet: str, free_math_c: bool 
         "nit": {s: scored[s][1] for s in subjects},
         "n_items": n_items, "n_students": n_students, "converged": conv, "iters": it,
         "free_math_c": free_math_c,
+        "diag_p": diag["p_value"], "diag_pbis": diag["pbis"], "diag_q1p": diag["q1_p"],
+        "section_rel": diag["section_rel"],
     }
 
 
 def build_frames(res, scale):
-    # Item parameters
+    # Item parameters + diagnostics
+    def r3(x):
+        return round(float(x), 3) if x is not None and np.isfinite(x) else "n/a"
     items = []
     for j, qid in enumerate(res["item_ids"]):
         n = int(res["n_adm"][j])
+        subj = res["item_subject"][j]
         if n == 0:
-            items.append([qid, res["item_subject"][j], None, None, None, None, 0, "None"])
-        else:
-            se = res["se"][j]
-            items.append([qid, res["item_subject"][j], round(float(res["a"][j]), 3),
-                          round(float(res["b"][j]), 3), round(float(res["c"][j]), 3),
-                          round(float(se), 3) if np.isfinite(se) else "n/a", n, engine._conf(n)])
+            items.append([qid, subj, None, None, None, None, 0, "None", None, None, None, "None"])
+            continue
+        se = res["se"][j]
+        pv, rpb, qp = res["diag_p"][j], res["diag_pbis"][j], res["diag_q1p"][j]
+        items.append([qid, subj, round(float(res["a"][j]), 3), round(float(res["b"][j]), 3),
+                      round(float(res["c"][j]), 3),
+                      round(float(se), 3) if np.isfinite(se) else "n/a", n, engine._conf(n),
+                      r3(pv), r3(rpb), r3(qp), engine.fit_flag(rpb, qp)])
     df_items = pd.DataFrame(items, columns=["Question ID", "Subject", "a (Discrimination)",
                                             "b (Difficulty)", "c (Guessing)", "SE (b)",
-                                            "n students", "Confidence"])
+                                            "n students", "Confidence", "p-value (CTT)",
+                                            "point-biserial", "fit p (Q1)", "Flag"])
     # Student scores
     subjects = res["subjects"]
     rows = []
@@ -240,7 +249,16 @@ with t_scores:
                        "student_scores.csv", "text/csv")
 
 with t_items:
-    st.dataframe(df_items, use_container_width=True, height=430)
+    rel = res.get("section_rel", {})
+    rel_txt = " · ".join(f"{s} reliability **{rel.get(s, float('nan')):.2f}**" for s in subjects)
+    flagmask = df_items["Flag"].fillna("").str.contains("Misfit|Low")
+    n_flag = int(flagmask.sum())
+    st.caption(f"IRT reliability — {rel_txt}  |  ⚠️ {n_flag} item(s) flagged (misfit or low discrimination). "
+               f"CTT: p-value = proportion correct; point-biserial = item–total correlation. "
+               f"fit p (Q1) < 0.01 ⇒ item doesn't match its fitted curve.")
+    only_flagged = st.checkbox("Show only flagged items", value=False)
+    view = df_items[flagmask] if only_flagged else df_items
+    st.dataframe(view, use_container_width=True, height=430)
     st.download_button("⬇️ Download item parameters (CSV)", df_items.to_csv(index=False).encode("utf-8"),
                        "item_parameters.csv", "text/csv")
     if res.get("free_math_c"):

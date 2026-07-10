@@ -52,7 +52,7 @@ import re
 import numpy as np
 from scipy.optimize import minimize, brentq
 from scipy.special import logsumexp
-from scipy.stats import norm, beta as beta_dist, lognorm
+from scipy.stats import norm, beta as beta_dist, lognorm, chi2
 from openpyxl import load_workbook, Workbook
 
 # ----------------------------------------------------------------------
@@ -238,6 +238,84 @@ def to_scaled(theta, xbar, sigma):
 
 
 # ----------------------------------------------------------------------
+# Diagnostics: Classical Test Theory (CTT) + IRT item fit
+# ----------------------------------------------------------------------
+FIT_ALPHA = 0.01        # p < this on the fit test => flag as misfitting
+PBIS_LOW = 0.10         # point-biserial below this => weak discrimination
+
+
+def compute_diagnostics(resp, mask, item_subject, a, b, c, subjects):
+    """Per-item CTT (p-value, corrected point-biserial) + IRT fit (Yen's Q1
+    chi-square vs the fitted 3PL curve), and per-section IRT reliability.
+    All computed post-calibration from the response matrix and EAP theta -
+    no re-running of EM."""
+    n_items = resp.shape[0]
+    p_value = np.full(n_items, np.nan)
+    pbis = np.full(n_items, np.nan)
+    q1 = np.full(n_items, np.nan)
+    q1_df = np.zeros(n_items, dtype=int)
+    q1_p = np.full(n_items, np.nan)
+    section_rel = {}
+
+    for s in subjects:
+        idx = np.where(item_subject == s)[0]
+        if len(idx) == 0:
+            continue
+        # EAP theta + posterior variance per person (using this section's items)
+        post, _ = _posterior(resp[idx], mask[idx], a[idx], b[idx], c[idx])
+        theta = post @ quad
+        psd2 = (post @ (quad ** 2)) - theta ** 2
+        section_rel[s] = float(max(0.0, min(1.0, 1.0 - np.nanmean(psd2))))  # prior var = 1
+
+        for j in idx:
+            m = mask[j].astype(bool)
+            if m.sum() == 0:
+                continue
+            u = resp[j][m].astype(float)
+            p_value[j] = float(u.mean())
+
+            # corrected item-total (point-biserial) vs rest-of-section score
+            others = [k for k in idx if k != j]
+            if others:
+                correct_oth = (mask[others][:, m] * resp[others][:, m]).sum(0)
+                count_oth = mask[others][:, m].sum(0)
+                rest = np.divide(correct_oth, count_oth, out=np.full(count_oth.shape, np.nan),
+                                 where=count_oth > 0)
+                ok = count_oth > 0
+                if ok.sum() > 2 and np.std(u[ok]) > 0 and np.nanstd(rest[ok]) > 0:
+                    pbis[j] = float(np.corrcoef(u[ok], rest[ok])[0, 1])
+
+            # Yen's Q1: bin examinees by theta, compare observed vs expected
+            th = theta[m]
+            n_took = int(m.sum())
+            G = min(10, max(2, n_took // 20))
+            order = np.argsort(th)
+            chi, used = 0.0, 0
+            for grp in np.array_split(order, G):
+                if len(grp) == 0:
+                    continue
+                Og = u[grp].mean()
+                Eg = float(np.clip(p_3pl(th[grp], a[j], b[j], c[j]).mean(), 1e-4, 1 - 1e-4))
+                chi += len(grp) * (Og - Eg) ** 2 / (Eg * (1 - Eg))
+                used += 1
+            df = max(1, used - 3)
+            q1[j], q1_df[j], q1_p[j] = chi, df, float(1 - chi2.cdf(chi, df))
+
+    return {"p_value": p_value, "pbis": pbis, "q1": q1, "q1_df": q1_df,
+            "q1_p": q1_p, "section_rel": section_rel}
+
+
+def fit_flag(pbis_j, q1_p_j):
+    """Human-readable quality flag combining fit + discrimination."""
+    flags = []
+    if np.isfinite(q1_p_j) and q1_p_j < FIT_ALPHA:
+        flags.append("Misfit")
+    if np.isfinite(pbis_j) and pbis_j < PBIS_LOW:
+        flags.append("Low discrimination")
+    return "; ".join(flags) if flags else "OK"
+
+
+# ----------------------------------------------------------------------
 # Reading any response table (CSV or Excel)
 # ----------------------------------------------------------------------
 def _pick_header_index(rows, max_scan=10):
@@ -316,19 +394,31 @@ def _conf(n):
     return "High" if n >= N_HIGH else "Moderate" if n >= N_MODERATE else "Low"
 
 
+def _r3(x):
+    return round(float(x), 3) if x is not None and np.isfinite(x) else "n/a"
+
+
 def write_workbook(path, item_ids, item_subject, a, b, c, se, n_adm,
-                   ids, names, scored, scale, subjects):
+                   ids, names, scored, scale, subjects, diag=None):
     wb = Workbook()
     ws1 = wb.active; ws1.title = "Item Parameters"
     ws1.append(["Question ID", "Subject", "a (Discrimination)", "b (Difficulty)",
-                "c (Guessing)", "SE (b)", "n students", "Confidence"])
+                "c (Guessing)", "SE (b)", "n students", "Confidence",
+                "p-value (CTT)", "point-biserial", "fit p (Q1)", "Flag"])
     for j, qid in enumerate(item_ids):
         n = int(n_adm[j])
         if n == 0:
-            ws1.append([qid, item_subject[j], None, None, None, None, 0, "None"]); continue
+            ws1.append([qid, item_subject[j], None, None, None, None, 0, "None",
+                        None, None, None, "None"]); continue
+        if diag is not None:
+            pv, rpb, qp = diag["p_value"][j], diag["pbis"][j], diag["q1_p"][j]
+            flag = fit_flag(rpb, qp)
+        else:
+            pv = rpb = qp = None; flag = ""
         ws1.append([qid, item_subject[j], round(float(a[j]), 3), round(float(b[j]), 3),
                     round(float(c[j]), 3),
-                    round(float(se[j]), 3) if np.isfinite(se[j]) else "n/a", n, _conf(n)])
+                    round(float(se[j]), 3) if np.isfinite(se[j]) else "n/a", n, _conf(n),
+                    _r3(pv), _r3(rpb), _r3(qp), flag])
 
     ws2 = wb.create_sheet("Student Scores")
     head = ["Id", "Name"]
@@ -440,8 +530,14 @@ def main():
         print(f"  {s:5s}: scale {xb:.0f}+{sg:.0f}*theta | mean score {sc.mean():.0f}, "
               f"range {sc.min()}-{sc.max()}")
 
+    diag = compute_diagnostics(resp, mask, item_subject, a, b, c, subjects)
+    rel = ", ".join(f"{s}={diag['section_rel'].get(s, float('nan')):.2f}" for s in subjects)
+    n_flag = sum(1 for j in range(n_items)
+                 if fit_flag(diag["pbis"][j], diag["q1_p"][j]) not in ("OK", "None", ""))
+    print(f"  IRT reliability: {rel} | items flagged (misfit/low-discrimination): {n_flag}")
+
     write_workbook(out, item_ids, item_subject, a, b, c, se, n_adm,
-                   ids, names, scored, scale, subjects)
+                   ids, names, scored, scale, subjects, diag=diag)
     print(f"Done -> {out}  (tabs: 'Item Parameters', 'Student Scores')")
 
 
