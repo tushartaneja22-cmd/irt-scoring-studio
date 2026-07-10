@@ -231,19 +231,33 @@ def to_scaled(theta, xbar, sigma):
 # ----------------------------------------------------------------------
 # Reading any response table (CSV or Excel)
 # ----------------------------------------------------------------------
+def _pick_header_index(rows, max_scan=10):
+    """Find the real header row: the first row (within the first few) that
+    contains several item-style column names (S<sec>_<id>_...). This skips
+    stray annotation rows some exports put on top (e.g. a "Question Id's" row
+    of bare numbers). Falls back to row 0 if no such row is found."""
+    for i, row in enumerate(rows[:max_scan]):
+        matches = sum(1 for v in row if v is not None and ITEM_COL_PATTERN.match(str(v).strip()))
+        if matches >= 3:
+            return i
+    return 0
+
+
 def read_table(path, sheet):
     ext = os.path.splitext(path)[1].lower()
     if ext in (".csv", ".txt", ".tsv"):
         delim = "\t" if ext == ".tsv" else ","
         with open(path, newline="", encoding="utf-8-sig") as f:
             rows = list(csv.reader(f, delimiter=delim))
-        return rows[0], rows[1:]
-    wb = load_workbook(path, data_only=True)
-    ws = wb[sheet] if sheet in wb.sheetnames else wb[wb.sheetnames[0]]
-    header = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
-    body = [[ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
-            for r in range(2, ws.max_row + 1)]
-    return header, body
+    else:
+        wb = load_workbook(path, data_only=True)
+        ws = wb[sheet] if sheet in wb.sheetnames else wb[wb.sheetnames[0]]
+        rows = [[ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
+                for r in range(1, ws.max_row + 1)]
+    if not rows:
+        return [], []
+    hi = _pick_header_index(rows)
+    return rows[hi], rows[hi + 1:]
 
 
 def _resp_val(v):
