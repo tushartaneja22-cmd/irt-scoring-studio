@@ -76,7 +76,7 @@ st.markdown(
 # Heavy engine call (cached): calibrate + WLE theta (no scaling yet)
 # ----------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def run_engine(file_bytes: bytes, file_name: str, sheet: str):
+def run_engine(file_bytes: bytes, file_name: str, sheet: str, free_math_c: bool = False):
     suffix = os.path.splitext(file_name)[1] or ".csv"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file_bytes)
@@ -100,7 +100,8 @@ def run_engine(file_bytes: bytes, file_name: str, sheet: str):
         names = [row[1] if len(row) > 1 else None for row in body]
 
         subjects = list(dict.fromkeys(item_subject.tolist()))
-        a, b, c, se, n_adm, it, conv = engine.calibrate(resp, mask, verbose=False)
+        free_mask = (item_subject == "Math") if free_math_c else None
+        a, b, c, se, n_adm, it, conv = engine.calibrate(resp, mask, verbose=False, free_c_mask=free_mask)
         scored = engine.score_students(resp, mask, item_subject, a, b, c, subjects)
     finally:
         os.unlink(path)
@@ -113,6 +114,7 @@ def run_engine(file_bytes: bytes, file_name: str, sheet: str):
         "theta": {s: scored[s][0] for s in subjects},
         "nit": {s: scored[s][1] for s in subjects},
         "n_items": n_items, "n_students": n_students, "converged": conv, "iters": it,
+        "free_math_c": free_math_c,
     }
 
 
@@ -168,9 +170,17 @@ sheet = "Student Responses"
 if up.name.lower().endswith((".xlsx", ".xlsm")):
     sheet = st.text_input("Excel sheet name", value="Student Responses")
 
-with st.spinner("Calibrating item parameters and estimating abilities… (runs once, then cached)"):
+free_math_c = st.toggle(
+    "🔬 Free math guessing (Option A) — let SPR / grid-in items self-identify (c → 0)",
+    value=False,
+    help="Default OFF keeps c ≈ 0.25 for every multiple-choice item (current behavior). When ON, math "
+         "items get a relaxed guessing prior so student-produced-response (grid-in) questions fall to "
+         "near-zero guessing automatically, while true MCQs stay near 0.25. Toggling re-runs calibration.",
+)
+
+with st.spinner("Calibrating item parameters and estimating abilities… (runs once per setting, then cached)"):
     try:
-        res = run_engine(up.getvalue(), up.name, sheet)
+        res = run_engine(up.getvalue(), up.name, sheet, free_math_c)
     except Exception as e:
         st.error(f"Could not process file: {e}")
         st.stop()
@@ -230,6 +240,17 @@ with t_items:
     st.dataframe(df_items, use_container_width=True, height=430)
     st.download_button("⬇️ Download item parameters (CSV)", df_items.to_csv(index=False).encode("utf-8"),
                        "item_parameters.csv", "text/csv")
+    if res.get("free_math_c"):
+        st.markdown("---")
+        st.caption("🔬 Option A is ON — math guessing (c) was estimated freely. "
+                   "Items with very low c are likely SPR / grid-in; genuine MCQs stay near 0.25.")
+        math_df = df_items[df_items["Subject"] == "Math"].copy()
+        cnum = pd.to_numeric(math_df["c (Guessing)"], errors="coerce")
+        math_df["Likely SPR"] = np.where(cnum < 0.10, "✅ grid-in?", "")
+        n_spr = int((cnum < 0.10).sum())
+        st.markdown(f"**Math items by estimated guessing (c), lowest first — {n_spr} flagged as likely grid-in**")
+        st.dataframe(math_df.sort_values("c (Guessing)", na_position="last"),
+                     use_container_width=True, height=330)
 
 with t_dist:
     score_cols = [f"{s} score" for s in subjects if f"{s} score" in df_scores]

@@ -66,7 +66,10 @@ N_HIGH, N_MODERATE = 200, 30    # confidence tiers by sample size
 
 A_BOUNDS, B_BOUNDS, C_BOUNDS = (0.05, 4.0), (-4.0, 4.0), (1e-3, 0.5)
 A_PRIOR_SD, B_PRIOR_SD = 0.5, 4.0
-C_PRIOR_A, C_PRIOR_B = 5, 13    # Beta(5,13), mode 0.25
+C_PRIOR_A, C_PRIOR_B = 5, 13    # Beta(5,13), mode 0.25 (default MCQ guessing prior)
+C_FREE_PRIOR_A, C_FREE_PRIOR_B = 1, 4   # relaxed prior for "free c" items: favors low c,
+#                                         lets data drive it -> SPR/grid-ins fall toward 0,
+#                                         MCQs stay near their data value (~0.25)
 
 MAX_EM_ITER, LL_TOL, _EPS = 500, 1e-4, 1e-6
 
@@ -104,27 +107,27 @@ def p_and_derivs(theta, a, b, c):
 # ----------------------------------------------------------------------
 # Stage 1: calibration
 # ----------------------------------------------------------------------
-def _log_prior(a, b, c):
+def _log_prior(a, b, c, free_c=False):
+    ca, cb = (C_FREE_PRIOR_A, C_FREE_PRIOR_B) if free_c else (C_PRIOR_A, C_PRIOR_B)
     return (lognorm.logpdf(a, s=A_PRIOR_SD, scale=1.0)
             + norm.logpdf(b, 0.0, B_PRIOR_SD)
-            + beta_dist.logpdf(np.clip(c, _EPS, 1 - _EPS), C_PRIOR_A, C_PRIOR_B))
+            + beta_dist.logpdf(np.clip(c, _EPS, 1 - _EPS), ca, cb))
 
 
-def _neg_log_post(params, n_k, r_k):
+def _neg_log_post(params, n_k, r_k, free_c=False):
     a, b, c = params
     p = np.clip(p_3pl(quad, a, b, c), _EPS, 1 - _EPS)
     ll = np.sum(r_k * np.log(p) + (n_k - r_k) * np.log(1 - p))
-    return -(ll + _log_prior(a, b, c))
+    return -(ll + _log_prior(a, b, c, free_c))
 
 
-def _se_b(params, n_k, r_k):
+def _se_b(params, n_k, r_k, free_c=False):
     x = np.asarray(params, float); h = 1e-4; H = np.zeros((3, 3))
     for i in range(3):
         for j in range(3):
-            d = np.zeros(3)
             def f(si, sj):
                 y = x.copy(); y[i] += si * h; y[j] += sj * h
-                return _neg_log_post(y, n_k, r_k)
+                return _neg_log_post(y, n_k, r_k, free_c)
             H[i, j] = (f(1, 1) - f(1, -1) - f(-1, 1) + f(-1, -1)) / (4 * h * h)
     try:
         v = np.linalg.inv(H)[1, 1]
@@ -146,9 +149,14 @@ def _posterior(resp, mask, a, b, c):
     return post, mll
 
 
-def calibrate(resp, mask, verbose=True):
+def calibrate(resp, mask, verbose=True, free_c_mask=None):
+    """free_c_mask: optional boolean array (n_items,). Items marked True get the
+    relaxed guessing prior so c is estimated freely (SPR/grid-ins fall toward 0)."""
     n_items = resp.shape[0]
     n_adm = mask.sum(1)
+    if free_c_mask is None:
+        free_c_mask = np.zeros(n_items, dtype=bool)
+    free_c_mask = np.asarray(free_c_mask, dtype=bool)
     a, b, c = np.ones(n_items), np.zeros(n_items), np.full(n_items, 0.25)
     converged, it, prev = False, 0, -np.inf
     for it in range(1, MAX_EM_ITER + 1):
@@ -158,7 +166,8 @@ def calibrate(resp, mask, verbose=True):
         for j in range(n_items):
             if n_adm[j] == 0:
                 continue
-            r = minimize(_neg_log_post, [a[j], b[j], c[j]], args=(n_jk[j], r_jk[j]),
+            r = minimize(_neg_log_post, [a[j], b[j], c[j]],
+                         args=(n_jk[j], r_jk[j], bool(free_c_mask[j])),
                          method="L-BFGS-B", bounds=[A_BOUNDS, B_BOUNDS, C_BOUNDS])
             chg = max(chg, *np.abs(r.x - [a[j], b[j], c[j]]))
             na[j], nb[j], nc[j] = r.x
@@ -170,8 +179,8 @@ def calibrate(resp, mask, verbose=True):
         prev = mll
     post, _ = _posterior(resp, mask, a, b, c)
     n_jk, r_jk = mask @ post, (mask * resp) @ post
-    se = np.array([_se_b([a[j], b[j], c[j]], n_jk[j], r_jk[j]) if n_adm[j] else np.nan
-                   for j in range(n_items)])
+    se = np.array([_se_b([a[j], b[j], c[j]], n_jk[j], r_jk[j], bool(free_c_mask[j]))
+                   if n_adm[j] else np.nan for j in range(n_items)])
     return a, b, c, se, n_adm, it, converged
 
 
@@ -372,6 +381,8 @@ def main():
     ap.add_argument("--scale", help='per-section "Name:xbar:sigma,..." e.g. "R&W:670:60,Math:710:70"')
     ap.add_argument("--scale-json", help="assessment JSON providing english/math xbar/sigma")
     ap.add_argument("--subject-keywords", help='override, e.g. "Math=math;R&W=reading,writing,verbal"')
+    ap.add_argument("--free-math-c", action="store_true",
+                    help="Option A: relax the guessing prior for math items so SPR/grid-ins self-identify (c->0)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -414,7 +425,10 @@ def main():
         print(f"  NOTE: no scale given for {missing_scale}; using default {DEFAULT_SCALE['Other']}")
 
     print("STAGE 1 - calibrating 3PL item parameters (Bock-Aitkin EM) ...")
-    a, b, c, se, n_adm, it, conv = calibrate(resp, mask, verbose=not args.quiet)
+    free_mask = (item_subject == "Math") if args.free_math_c else None
+    if args.free_math_c:
+        print("  Option A ON: math guessing prior relaxed (SPR/grid-ins self-identify, c->0)")
+    a, b, c, se, n_adm, it, conv = calibrate(resp, mask, verbose=not args.quiet, free_c_mask=free_mask)
     print(f"  {'converged' if conv else 'STOPPED at cap'} after {it} iterations")
 
     print("STAGE 2 - scoring students (WLE theta per section) ...")
