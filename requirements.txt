@@ -1,6 +1,8 @@
-# rebuild marker: fit-ctt-diagnostics
-streamlit==1.55.0
-pandas==2.3.3
-numpy==2.4.2
-scipy==1.17.1
-openpyxl==3.1.5
+# Loosened for Streamlit Community Cloud (older Python than local 3.14).
+# Minimum versions that provide every API this app uses, installable across
+# Cloud's Python (3.11-3.13) without needing bleeding-edge wheels.
+streamlit>=1.30
+pandas>=2.0
+numpy>=1.26
+scipy>=1.11
+openpyxl>=3.1
