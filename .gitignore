@@ -11,9 +11,10 @@ A, B, C Values.xlsx
 output/
 
 # ---- Scratch, logs, caches ----
-_*.py
+/_*.py
 _*.log
 _*.out
+!**/__init__.py
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
