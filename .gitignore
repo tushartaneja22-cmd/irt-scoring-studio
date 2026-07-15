@@ -1,0 +1,21 @@
+# ---- Student data & PII — NEVER commit ----
+Digital_SAT_Mock_Test_*.csv
+output/student_scores.csv
+output/scores_*.csv
+
+# ---- Proprietary / official item parameters ----
+A, B, C Values.xlsx
+*.json.txt
+
+# ---- Derived outputs (regenerable by running the code) ----
+output/
+
+# ---- Scratch, logs, caches ----
+_*.py
+_*.log
+_*.out
+__pycache__/
+*.pyc
+.streamlit/
+.venv/
+venv/
