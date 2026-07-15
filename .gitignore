@@ -16,6 +16,6 @@ _*.log
 _*.out
 __pycache__/
 *.pyc
-.streamlit/
+.streamlit/secrets.toml
 .venv/
 venv/

@@ -4,6 +4,26 @@ A 3-parameter (3PL) Item Response Theory calibration + scoring engine for
 Digital SAT adaptive mock-test data. Built to match and exceed commercial
 calibrators (Xcalibre, flexMIRT, IRTPRO) on this kind of data.
 
+## Live app / deploy on Streamlit Cloud
+
+The web app is `app.py`. To deploy on [Streamlit Community Cloud](https://share.streamlit.io):
+
+1. Go to **https://share.streamlit.io** and sign in with GitHub.
+2. **New app → From existing repo**, then set:
+   - Repository: `tushartaneja22-cmd/irt-scoring-studio`
+   - Branch: `main`
+   - Main file path: `app.py`
+3. Click **Deploy**. Streamlit installs `requirements.txt` and launches the app.
+
+One-click (pre-fills the form — you still click *Deploy*):
+`https://share.streamlit.io/deploy?repository=tushartaneja22-cmd/irt-scoring-studio&branch=main&mainModule=app.py`
+
+Run locally instead:
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
 ## What it does
 
 1. **Parses** the Digital SAT CSV export (adaptive 2-stage: Module 1 anchor +
