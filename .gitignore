@@ -10,6 +10,9 @@ output/
 output_link/
 output_xcalibre/
 
+# xCalibre dev cache (rebuilt by engine/_xcal_cache.py)
+engine/_xcal_raw.npz
+
 # Raw student-response data and reference values are NOT committed to this
 # public repo. The app is upload-driven — provide these at runtime instead.
 Digital_SAT_Mock_Test_-*.csv

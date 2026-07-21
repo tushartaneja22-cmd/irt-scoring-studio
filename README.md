@@ -50,53 +50,45 @@ the others — i.e. the accuracy expected on a **brand-new** mock:
 
 | Parameter | Reading & Writing | Math |
 |-----------|------------------|------|
-| `b` difficulty | RMSE ≈ 0.44, r ≈ 0.96 | RMSE ≈ 0.44, r ≈ 0.94 |
-| `c` guessing   | RMSE ≈ 0.015 | RMSE ≈ 0.022 |
-| `a` discrimination | RMSE ≈ 0.13 | RMSE ≈ 0.20 |
+| `b` difficulty | RMSE ≈ 0.43, r ≈ 0.96 | RMSE ≈ 0.44, r ≈ 0.94 |
+| `c` guessing   | RMSE ≈ 0.016 | RMSE ≈ 0.022 |
+| `a` discrimination | RMSE ≈ 0.14 | RMSE ≈ 0.21 |
 
-The `b` link uses a **continuity-corrected, guessing-adjusted difficulty feature** (plus a
-cubic term and a ±4 clamp) so that extreme easy/hard items — where the raw proportion
-saturates — still reach the reference's extreme difficulties. This cut the Math tail
-(p ≥ 0.9 or ≤ 0.15) b-RMSE by ~17%.
+**Link features.** The `b` link uses a **continuity-corrected, guessing-adjusted difficulty
+feature** (plus a cubic tail term and a ±4 clamp) so extreme easy/hard items still reach the
+reference's extreme difficulties. Both `a` and `b` also use **classical discrimination
+proxies** (biserial and point-biserial correlations), and `b` a discrimination×difficulty
+interaction. Adding these lifted the held-out `a` correlation markedly (rw r 0.40 → 0.50,
+math r 0.31 → 0.41) and trimmed rw `b` RMSE (0.442 → 0.430) — all leave-one-out validated,
+gold-free, at the same ~4 s/mock. We also tested ridge/robust regression and stacking the
+xCalibre engine's estimates as extra features: only math `a` improved from stacking, at ~10×
+runtime, so it was **not** adopted.
 
-`c` is essentially exact. `b` tracks the gold standard tightly. `a` is intrinsically
-hard to recover here because the reference `a` values are heavily shrunk (sd ≈ 0.12) — the
-calibrator matches their central tendency, and the residual signal is small for everyone.
-Lightly-taken adaptive modules (e.g. mock 117 Math's hard module, 12–17 takers) are
-flagged and unavoidably noisier.
+`c` is essentially exact. `b` tracks the gold standard tightly. `a` is intrinsically hard to
+recover here because the reference `a` values are heavily shrunk (sd ≈ 0.12) — the calibrator
+matches their central tendency and the residual signal is small for everyone; the
+discrimination proxies recover as much of it as generalises. Lightly-taken adaptive modules
+(e.g. mock 117 Math's hard module, 12–17 takers) are flagged and unavoidably noisier.
 
-## Artificial correction toggle
+## Why there is no "correction toggle"
 
-Each mock's raw output carries a residual deviation from the reference that is two
-things stacked: a **per-mock offset/scale wobble** (mostly in `a`, and some mocks'
-`b`) and **irreducible item-level scatter** (`b`'s ~0.4 RMSE is just the r ≈ 0.96
-residual, `b` sd ≈ 1.3 → 1.3·√(1−0.96²) ≈ 0.37 — not a bias). The offsets *flip
-sign across mocks*, so a learned global correction fitted on other mocks makes a new
-mock **worse** out-of-sample (every leave-one-out affine fit raised RMSE). The only
-lever that reduces error on a given mock uses that mock's **own** reference values.
+It is tempting to add a post-hoc knob that nudges the output onto the reference values.
+We tested this rigorously and **removed it from the app**, because the only version that
+improves accuracy is dishonest for real use:
 
-That is what the **artificial correction** does — it is gold-anchored, so it needs the
-reference workbook loaded and applies only to **referenced** mocks. Use it to
-reproduce / audit reference values, not to score a brand-new un-referenced mock. Per
-subject × parameter, modes escalate:
+- The deviation from the reference is two things stacked: a **per-mock offset** (mostly
+  in `a`) and **irreducible item-level scatter** (`b`'s ~0.4 RMSE is just the r ≈ 0.96
+  residual — `b` sd ≈ 1.3, so 1.3·√(1−0.96²) ≈ 0.37 — not a bias a formula can remove).
+- The per-mock offsets **flip sign across mocks**, so any correction learned from other
+  mocks and applied gold-free makes a **new** mock *worse*. Every leave-one-out variant
+  (match-mean, match-mean+sd, affine regress) raised held-out RMSE.
+- The only thing that lowers a given mock's error uses that mock's **own** reference
+  answer key — which is circular (if you have the a/b/c, you don't need to estimate them).
 
-| Mode | Transform | Keeps rank? | Effect |
-|------|-----------|-------------|--------|
-| `off` | identity | — | raw studio output |
-| `bias` | `+ (mean_gold − mean_est)` | yes | matches the reference **mean** |
-| `moment` | z-score to gold mean **and** sd | yes | matches first two moments |
-| `regress` | oracle LSQ `gold ~ k·est + m` | yes | **minimum RMSE** for the ranking |
-| `exact` | snap to gold | n/a | RMSE = 0 (reproduce the sheet) |
-
-A **strength** slider (0–1) blends raw → corrected. `regress` is the safe choice
-(never worse than `off` on RMSE, and it shrinks its slope on low-correlation params
-like `a`/`c` instead of amplifying noise the way `moment` can); `exact` is the full
-snap. Example on mock 119 Math `b`: RMSE 0.374 (off) → 0.302 (bias) → 0.272
-(regress) → 0 (exact). Corrected workbooks keep `*_uncorrected`, `*_gold`, and a
-`corrected` label column so every adjustment is auditable.
-
-App: **sidebar → Artificial correction** (mode + strength). CLI: `--correct
-{off,bias,moment,regress,exact} --strength 0..1` (with `--gold`).
+So the honest, generalising correction is simply the calibration itself (below). A
+gold-anchored alignment remains available as a **developer/QA tool** in the CLI
+(`--correct {bias,moment,regress,exact} --strength 0..1`, requires `--gold`) for
+*reproducing/auditing* the six reference mocks — it is deliberately **not** in the app.
 
 ## Usage
 

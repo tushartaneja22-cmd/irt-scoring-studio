@@ -3,9 +3,9 @@ IRT Scoring Studio — Digital SAT 3PL item calibration.
 
 Upload a mock CSV (same export format as the reference mocks) and the app
 produces a / b / c (discrimination / difficulty / guessing) for every item,
-with QC flags, validation against a gold standard (optional), and downloads.
+with QC flags and Excel / CSV downloads. Upload CSV, get a/b/c — that's it.
 
-Run:  streamlit run app/app.py
+Run:  streamlit run app/app.py   (or streamlit run app.py from the repo root)
 """
 import os, sys, io, tempfile
 import numpy as np
@@ -15,9 +15,8 @@ import streamlit as st
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'engine'))
 from pipeline import run_mock, DEFAULT_PRIOR, N_POINTS, N_MIN, LINK_PATH
-from report import write_results_xlsx, validation_table
+from report import write_results_xlsx
 import link as linkmod
-from gold import load_gold
 
 st.set_page_config(page_title='IRT Scoring Studio', page_icon='📊', layout='wide')
 
@@ -48,27 +47,6 @@ with st.sidebar:
     n_min = st.slider('Low-confidence threshold (min students per item)', 5, 200, N_MIN, 5,
                       help='Items administered to fewer students than this are flagged '
                            '(common for lightly-taken adaptive modules).')
-    st.divider()
-    st.subheader('Artificial correction')
-    st.caption('Gold-anchored alignment onto the reference metric. Needs the gold '
-               'workbook loaded and only affects **referenced** mocks — it uses the '
-               "mock's own reference values, so it reproduces/audits the sheet rather "
-               'than generalising to a new mock.')
-    correction = st.select_slider(
-        'Correction mode',
-        options=['off', 'bias', 'moment', 'regress', 'exact'],
-        value='off',
-        format_func=lambda m: {
-            'off': 'Off (raw studio)', 'bias': 'Bias (match mean)',
-            'moment': 'Moment (mean+sd)', 'regress': 'Regress (min RMSE)',
-            'exact': 'Exact (=gold)'}[m],
-        help='off: raw output. bias: shift to the reference mean (keeps spread & rank). '
-             'moment: match reference mean and sd. regress: oracle least-squares fit '
-             '(lowest RMSE for the ranking). exact: snap to gold (RMSE 0).')
-    strength = st.slider('Correction strength', 0.0, 1.0, 1.0, 0.05,
-                         disabled=(correction == 'off'),
-                         help='Blend raw -> corrected. 0 = off, 1 = full mode.')
-
     with st.expander('Advanced (model priors)'):
         st.caption('MAP priors that stabilise small-sample estimation. Defaults reproduce '
                    'the reference calibration; change only if you know what you are doing.')
@@ -86,29 +64,12 @@ with st.sidebar:
     st.caption(f"Link model trained on mocks: {', '.join(model.get('trained_on', []))}")
 
 # ----- inputs -----------------------------------------------------------------
-c1, c2 = st.columns(2)
-with c1:
-    uploads = st.file_uploader('Mock response CSV(s)', type='csv', accept_multiple_files=True)
-with c2:
-    gold_file = st.file_uploader('Gold-standard a/b/c workbook (optional, for validation)',
-                                 type='xlsx')
-
-gold = None
-if gold_file is not None:
-    gp = os.path.join(tempfile.gettempdir(), 'irt_gold.xlsx')
-    with open(gp, 'wb') as fh:
-        fh.write(gold_file.getbuffer())
-    try:
-        gold = load_gold(gp)
-        st.success(f'Loaded gold standard: {len(gold)} subject sheets.')
-    except Exception as e:
-        st.warning(f'Could not read gold workbook: {e}')
+uploads = st.file_uploader('Mock response CSV(s)', type='csv', accept_multiple_files=True)
 
 
 @st.cache_data(show_spinner=False)
-def _run(path, prior_cfg, n_points, n_min, mode, mock_id, correction, strength, _gold):
-    return run_mock(path, prior_cfg=prior_cfg, n_points=n_points, n_min=n_min, mode=mode,
-                    gold=_gold, mock_id=mock_id, correction=correction, strength=strength)
+def _run(path, prior_cfg, n_points, n_min, mode):
+    return run_mock(path, prior_cfg=prior_cfg, n_points=n_points, n_min=n_min, mode=mode)
 
 
 def guess_mock_id(name):
@@ -134,23 +95,10 @@ for up in uploads:
         fh.write(up.getbuffer())
     with st.spinner(f'Calibrating {up.name} …'):
         try:
-            res = _run(tmp, prior_cfg, int(n_points), int(n_min), mode,
-                       mock_id, correction, float(strength), gold)
+            res = _run(tmp, prior_cfg, int(n_points), int(n_min), mode)
         except Exception as e:
             st.error(f'Failed to process {up.name}: {e}')
             continue
-    if correction != 'off':
-        if gold is None:
-            st.warning('Artificial correction is on but no gold workbook is loaded — '
-                       'showing raw output. Upload the gold a/b/c workbook to apply it.')
-        else:
-            applied = [s for s in res if res[s].get('correction', 'off') != 'off']
-            if applied:
-                st.info(f'🔧 Artificial correction **{correction}** @ {strength:.2f} applied to: '
-                        f'{", ".join(applied)} (aligned to loaded gold).')
-            else:
-                st.warning(f'Correction on, but mock {mock_id} has no positionally-aligned '
-                           'gold sheet — showing raw output.')
 
     subjects = [s for s in ('rw', 'math') if s in res]
     tabs = st.tabs([{'rw': 'Reading & Writing', 'math': 'Math'}[s] for s in subjects])
@@ -165,24 +113,6 @@ for up in uploads:
             m2.metric('Items', len(items))
             m3.metric('Mean discrimination a', f"{df['a'].mean():.2f}")
             m4.metric('Flagged items', n_flag)
-
-            # validation
-            if gold is not None and (mock_id, subj) in gold:
-                g = gold[(mock_id, subj)]
-                if g.shape[0] == len(items):
-                    st.markdown('**Validation vs gold standard**')
-                    vt = validation_table(res, gold, mock_id)
-                    vsub = [r for r in vt if r['subject'] == subj]
-                    vc = st.columns(3)
-                    for col, r in zip(vc, vsub):
-                        cls = 'metric-good' if r['rmse'] < (0.03 if r['param'] == 'c' else 0.6) else 'metric-warn'
-                        col.markdown(f"**{r['param']}** &nbsp; r=<span class='{cls}'>{r['r']:.3f}</span> "
-                                     f"&nbsp; rmse=<span class='{cls}'>{r['rmse']:.3f}</span>",
-                                     unsafe_allow_html=True)
-                else:
-                    st.info(f'Gold sheet for {mock_id} {subj} has {g.shape[0]} items vs '
-                            f'{len(items)} estimated (reference dropped thin items) — '
-                            'positional validation skipped.')
 
             show = df[['qid', 'section', 'itemtype', 'n', 'p', 'a', 'b', 'c', 'flags']]
             st.dataframe(show.style.apply(color_flag, axis=1), use_container_width=True,
@@ -199,7 +129,7 @@ for up in uploads:
 
     # downloads
     xlsx_path = os.path.join(tempfile.gettempdir(), f'irt_{mock_id}_abc.xlsx')
-    write_results_xlsx(res, xlsx_path, gold=gold, mock_id=mock_id)
+    write_results_xlsx(res, xlsx_path)
     all_df = pd.concat([pd.DataFrame(res[s]['items']) for s in subjects], ignore_index=True)
     d1, d2 = st.columns(2)
     with open(xlsx_path, 'rb') as fh:

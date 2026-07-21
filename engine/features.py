@@ -50,6 +50,9 @@ def build_features(calib, stats):
     """Return dict feature_name -> array, combining MML params and CTT stats."""
     f = dict(a=calib.a, b=calib.b, c=calib.c)
     f.update({k: stats[k] for k in ('p', 'rp', 'zp', 'zpc', 'rbis', 'zcc', 'zcc3')})
+    # discrimination×difficulty interaction: a cheap term that sharpens the b link
+    # in the tails (a high-biserial very-easy/hard item behaves differently).
+    f['inter'] = stats['rbis'] * stats['zcc']
     return f
 
 

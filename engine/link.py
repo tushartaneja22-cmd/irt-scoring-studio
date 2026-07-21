@@ -12,9 +12,13 @@ import json
 import numpy as np
 from features import design_matrix
 
-# feature columns per parameter (shared across subjects)
-A_COLS = ['a']
-B_COLS = ['b', 'zcc', 'zcc3', 'zpc', 'rbis']
+# feature columns per parameter (shared across subjects; coefficients fit per subject).
+# `a` gains cheap classical discrimination proxies (biserial / point-biserial), which
+# recover more of the reference discrimination than the MML slope alone. `b` adds the
+# same discrimination signal plus a discrimination×difficulty interaction that sharpens
+# the tails. Both changes are leave-one-mock-out validated (honest, gold-free).
+A_COLS = ['a', 'rbis', 'rp']
+B_COLS = ['b', 'zcc', 'zcc3', 'zpc', 'rbis', 'rp', 'inter']
 C_COLS = ['c']
 B_CLIP = (-4.0, 4.0)   # reference difficulties are bounded at the tails
 
