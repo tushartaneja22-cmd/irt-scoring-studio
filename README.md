@@ -70,6 +70,25 @@ matches their central tendency and the residual signal is small for everyone; th
 discrimination proxies recover as much of it as generalises. Lightly-taken adaptive modules
 (e.g. mock 117 Math's hard module, 12–17 takers) are flagged and unavoidably noisier.
 
+## Scaled scores
+
+Beyond item parameters, the app scores **students**. From the calibrated 3PL pool it
+estimates each student's latent ability **θ by EAP** (expected a-posteriori) on the same
+`N(0,1)` trait, using only that student's administered items (robust to adaptive routing,
+and finite even for all-correct / all-incorrect students). θ is then mapped to a Digital-SAT
+section scale:
+
+```
+section = round( mean + sd·θ )  clamped to [200, 800], rounded to 10   (default mean 500, sd 100)
+total   = RW + Math             (400–1600)
+```
+
+The **Scaled scores** tab shows every student's Id, name, section scores, total, and items
+answered, with a distribution and CSV download; the section mean/sd are adjustable in the
+sidebar. This is a **transparent norm-referenced** conversion (θ standardised on the cohort),
+**not** the College Board's official, proprietary, form-specific raw-to-scaled table — treat
+it as a well-calibrated relative score, not an official SAT score.
+
 ## Why there is no "correction toggle"
 
 It is tempting to add a post-hoc knob that nudges the output onto the reference values.

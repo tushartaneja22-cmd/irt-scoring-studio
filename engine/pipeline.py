@@ -15,6 +15,7 @@ from features import classical_stats, build_features
 import link as linkmod
 from xcalibre import calibrate_xcalibre, XCalConfig
 from correction import correct_subject
+from scoring import score_subject
 
 DEFAULT_PRIOR = dict(c0=0.25, mu_a=float(np.log(0.80)), sd_a=0.25, sd_g=0.25, sd_d=4.0)
 N_POINTS = 61
@@ -45,7 +46,8 @@ def _apply_xcal_anchor(anchor, subj, res):
 
 
 def run_mock(path, model=None, prior_cfg=None, n_points=N_POINTS, n_min=N_MIN,
-             mode='link', gold=None, mock_id=None, correction='off', strength=1.0):
+             mode='link', gold=None, mock_id=None, correction='off', strength=1.0,
+             score_scale=None):
     """Return dict subject -> list of per-item records with a,b,c and QC.
     mode: 'link' (default) or 'xcalibre'.
 
@@ -93,11 +95,24 @@ def run_mock(path, model=None, prior_cfg=None, n_points=N_POINTS, n_min=N_MIN,
             gold_arr = gold.get((mock_id, subj)) if mock_id is not None else None
             applied = correct_subject(recs, gold_arr, mode=correction,
                                       strength=strength, n_min=n_min)
+        # per-student EAP ability + scaled score, on the engine's native trait metric
+        D = 1.702 if mode == 'xcalibre' else 1.0
+        sc = score_subject(sd.responses, res.a, res.b, res.c, D=D,
+                           n_points=n_points, scale=score_scale)
+        scores = {
+            'student_id': list(sd.student_ids), 'student_name': list(sd.student_names),
+            'theta': [round(float(t), 3) for t in sc['theta']],
+            'se': [round(float(s), 3) for s in sc['se']],
+            'scaled': [int(v) for v in sc['scaled']],
+            'n_answered': [int(v) for v in sc['n_answered']],
+            'n_correct': [int(v) for v in sc['n_correct']],
+        }
         out[subj] = {
             'items': recs,
             'n_students': sd.n_students,
             'n_iter': res.n_iter,
             'converged': res.converged,
             'correction': f'{correction}@{strength:.2f}' if applied else 'off',
+            'scores': scores,
         }
     return out

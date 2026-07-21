@@ -41,6 +41,8 @@ class SubjectData:
     items: list                        # list[ItemMeta] in column order
     responses: np.ndarray              # (n_students, n_items) float, NaN = not administered
     qids: list = field(default_factory=list)
+    student_ids: list = field(default_factory=list)   # aligned to responses rows
+    student_names: list = field(default_factory=list)
 
     @property
     def n_students(self):
@@ -77,6 +79,17 @@ def load_mock(path):
     data_rows = [r for r in data_rows if r and r[0].strip().isdigit()]
     n = len(data_rows)
 
+    # student identifiers (aligned to response rows); Name column is optional
+    def _find(name):
+        for i, h in enumerate(header):
+            if h.strip().lower() == name:
+                return i
+        return None
+    id_i, name_i = 0, _find('name')
+    student_ids = [row[id_i].strip() if id_i < len(row) else '' for row in data_rows]
+    student_names = [row[name_i].strip() if name_i is not None and name_i < len(row) else ''
+                     for row in data_rows]
+
     out = {}
     for subj in ('rw', 'math'):
         cols = [(i, meta) for i, meta in item_cols if meta.subject == subj]
@@ -89,7 +102,8 @@ def load_mock(path):
                 if i < len(row):
                     M[r, j] = _parse_cell(row[i])
         out[subj] = SubjectData(subject=subj, items=metas, responses=M,
-                                qids=[m.qid for m in metas])
+                                qids=[m.qid for m in metas],
+                                student_ids=student_ids, student_names=student_names)
     return out
 
 

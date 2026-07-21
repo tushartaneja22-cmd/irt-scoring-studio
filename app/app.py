@@ -47,6 +47,13 @@ with st.sidebar:
     n_min = st.slider('Low-confidence threshold (min students per item)', 5, 200, N_MIN, 5,
                       help='Items administered to fewer students than this are flagged '
                            '(common for lightly-taken adaptive modules).')
+    with st.expander('Scaled-score scale'):
+        st.caption('Section score = mean + sd·θ (θ standardised on N(0,1)), clamped to '
+                   '[200, 800] and rounded to 10. Norm-referenced — **not** the official '
+                   'College Board raw-to-scaled table.')
+        sc_mean = st.number_input('Section mean', 200, 800, 500, 10)
+        sc_sd = st.number_input('Section sd', 20, 200, 100, 5)
+    score_scale = {'mean': float(sc_mean), 'sd': float(sc_sd)}
     with st.expander('Advanced (model priors)'):
         st.caption('MAP priors that stabilise small-sample estimation. Defaults reproduce '
                    'the reference calibration; change only if you know what you are doing.')
@@ -68,8 +75,9 @@ uploads = st.file_uploader('Mock response CSV(s)', type='csv', accept_multiple_f
 
 
 @st.cache_data(show_spinner=False)
-def _run(path, prior_cfg, n_points, n_min, mode):
-    return run_mock(path, prior_cfg=prior_cfg, n_points=n_points, n_min=n_min, mode=mode)
+def _run(path, prior_cfg, n_points, n_min, mode, score_scale):
+    return run_mock(path, prior_cfg=prior_cfg, n_points=n_points, n_min=n_min, mode=mode,
+                    score_scale=score_scale)
 
 
 def guess_mock_id(name):
@@ -82,9 +90,28 @@ def color_flag(row):
     return ['background-color:#fce4d6' if row['flags'] else '' for _ in row]
 
 
+def scaled_scores_df(res, subjects):
+    """Combine per-student EAP scaled scores across subjects (rows are aligned to
+    the same students). Adds a Total when both sections are present."""
+    label = {'rw': 'RW', 'math': 'Math'}
+    base = res[subjects[0]]['scores']
+    n = len(base['student_id'])
+    data = {'Id': base['student_id'], 'Name': base['student_name']}
+    total = np.zeros(n)
+    for s in subjects:
+        sc = res[s]['scores']
+        data[f'{label[s]} (200–800)'] = sc['scaled']
+        data[f'{label[s]} answered'] = sc['n_answered']
+        total += np.asarray(sc['scaled'])
+    if len(subjects) > 1:
+        data['Total (400–1600)'] = total.astype(int)
+    return pd.DataFrame(data)
+
+
 if not uploads:
-    st.info('⬆️ Upload one or more mock CSVs to begin. Output matches the reference '
-            'workbook layout (a, b, c per item) and can be downloaded as Excel or CSV.')
+    st.info('⬆️ Upload one or more mock CSVs to begin. You get per-item **a, b, c** '
+            '(reference-workbook layout) plus a **Scaled scores** tab with each student’s '
+            'section and total scores — all downloadable as Excel or CSV.')
     st.stop()
 
 for up in uploads:
@@ -95,13 +122,14 @@ for up in uploads:
         fh.write(up.getbuffer())
     with st.spinner(f'Calibrating {up.name} …'):
         try:
-            res = _run(tmp, prior_cfg, int(n_points), int(n_min), mode)
+            res = _run(tmp, prior_cfg, int(n_points), int(n_min), mode, score_scale)
         except Exception as e:
             st.error(f'Failed to process {up.name}: {e}')
             continue
 
     subjects = [s for s in ('rw', 'math') if s in res]
-    tabs = st.tabs([{'rw': 'Reading & Writing', 'math': 'Math'}[s] for s in subjects])
+    tab_labels = [{'rw': 'Reading & Writing', 'math': 'Math'}[s] for s in subjects]
+    tabs = st.tabs(tab_labels + ['📈 Scaled scores'])
     for tab, subj in zip(tabs, subjects):
         with tab:
             info = res[subj]
@@ -126,6 +154,28 @@ for up in uploads:
             with g2:
                 st.caption('Discrimination (a) vs difficulty (b)')
                 st.scatter_chart(df, x='b', y='a', size='n')
+
+    # ----- scaled scores tab --------------------------------------------------
+    with tabs[-1]:
+        ss = scaled_scores_df(res, subjects)
+        st.caption(f'Per-student **EAP ability (θ)** from the calibrated 3PL items, mapped to '
+                   f'a section scale (mean {int(sc_mean)}, sd {int(sc_sd)}, clamped 200–800, '
+                   'rounded to 10). Norm-referenced — not the official College Board conversion.')
+        main_col = 'Total (400–1600)' if 'Total (400–1600)' in ss else ss.columns[2]
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric('Students', len(ss))
+        s2.metric(f'Mean {main_col.split(" (")[0].lower()}', f"{ss[main_col].mean():.0f}")
+        s3.metric('Median', f"{ss[main_col].median():.0f}")
+        s4.metric('Min / Max', f"{ss[main_col].min():.0f} / {ss[main_col].max():.0f}")
+        st.dataframe(ss, use_container_width=True, height=380, hide_index=True)
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.caption(f'{main_col} distribution')
+            st.bar_chart(np.histogram(ss[main_col], bins=20)[0])
+        with c2:
+            st.download_button('⬇️ Download scaled scores (CSV)', ss.to_csv(index=False),
+                               file_name=f'mock_{mock_id}_scaled_scores.csv',
+                               key=f'scaled_{up.name}', use_container_width=True)
 
     # downloads
     xlsx_path = os.path.join(tempfile.gettempdir(), f'irt_{mock_id}_abc.xlsx')
