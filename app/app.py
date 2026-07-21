@@ -110,7 +110,7 @@ def scaled_scores_df(res, subjects):
     for s in subjects:
         sc = res[s]['scores']
         data[f'{label[s]} (200–800)'] = sc['scaled']
-        data[f'{label[s]} answered'] = sc['n_answered']
+        data[f'{label[s]} correct'] = sc['n_correct']
         total += np.asarray(sc['scaled'])
     if len(subjects) > 1:
         data['Total (400–1600)'] = total.astype(int)
