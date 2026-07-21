@@ -99,19 +99,22 @@ def color_flag(row):
     return ['background-color:#fce4d6' if row['flags'] else '' for _ in row]
 
 
-def scaled_scores_df(res, subjects):
+def scaled_scores_df(res, subjects, subtract=None):
     """Combine per-student EAP scaled scores across subjects (rows are aligned to
-    the same students). Adds a Total when both sections are present."""
+    the same students). `subtract` is an optional {subject: points} manual deduction
+    applied per section (floored at 200). Adds a Total when both sections are present."""
     label = {'rw': 'RW', 'math': 'Math'}
+    subtract = subtract or {}
     base = res[subjects[0]]['scores']
     n = len(base['student_id'])
     data = {'Id': base['student_id'], 'Name': base['student_name']}
     total = np.zeros(n)
     for s in subjects:
         sc = res[s]['scores']
-        data[f'{label[s]} (200–800)'] = sc['scaled']
+        adj = np.clip(np.asarray(sc['scaled']) - int(subtract.get(s, 0)), 200, 800).astype(int)
+        data[f'{label[s]} (200–800)'] = adj
         data[f'{label[s]} correct'] = sc['n_correct']
-        total += np.asarray(sc['scaled'])
+        total += adj
     if len(subjects) > 1:
         data['Total (400–1600)'] = total.astype(int)
     return pd.DataFrame(data)
@@ -166,13 +169,27 @@ for up in uploads:
 
     # ----- scaled scores tab --------------------------------------------------
     with tabs[-1]:
-        ss = scaled_scores_df(res, subjects)
         _lbl = {'rw': 'R&W', 'math': 'Math'}
         scale_bits = '; '.join(f'{_lbl[s]} mean {int(score_scale[s]["mean"])} sd {int(score_scale[s]["sd"])}'
                                for s in subjects)
         st.caption(f'Per-student **EAP ability (θ)** from the calibrated 3PL items, mapped to a '
                    f'section scale ({scale_bits}; clamped 200–800, rounded to 10). '
                    'Norm-referenced — not the official College Board conversion.')
+
+        # manual per-section deduction
+        st.markdown('**Manual adjustment** — subtract points from every student in a section:')
+        a1, a2 = st.columns(2)
+        subtract = {}
+        if 'rw' in subjects:
+            subtract['rw'] = a1.number_input('Subtract from Reading & Writing', 0, 600, 0, 10,
+                                             key=f'rwsub_{up.name}')
+        if 'math' in subjects:
+            subtract['math'] = a2.number_input('Subtract from Math', 0, 600, 0, 10,
+                                               key=f'mathsub_{up.name}')
+        ss = scaled_scores_df(res, subjects, subtract)
+        if any(subtract.values()):
+            st.caption('Adjustment applied to the table, total, and download below '
+                       '(scores floored at 200).')
         main_col = 'Total (400–1600)' if 'Total (400–1600)' in ss else ss.columns[2]
         s1, s2, s3, s4 = st.columns(4)
         s1.metric('Students', len(ss))
