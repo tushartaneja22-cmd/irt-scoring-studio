@@ -46,17 +46,34 @@ def classical_stats(responses):
     return dict(p=p, rp=rp, zp=zp, zpc=zpc, rbis=rbis, nadm=nadm, zcc=zcc, zcc3=zcc3)
 
 
+# Derived features, defined once so build_features and design_matrix never disagree.
+# discrimination×difficulty interaction: a cheap term that sharpens the b link in the
+# tails (a high-biserial very-easy/hard item behaves differently).
+DERIVED = {
+    'inter': lambda f: f['rbis'] * f['zcc'],
+}
+
+
 def build_features(calib, stats):
     """Return dict feature_name -> array, combining MML params and CTT stats."""
     f = dict(a=calib.a, b=calib.b, c=calib.c)
     f.update({k: stats[k] for k in ('p', 'rp', 'zp', 'zpc', 'rbis', 'zcc', 'zcc3')})
-    # discrimination×difficulty interaction: a cheap term that sharpens the b link
-    # in the tails (a high-biserial very-easy/hard item behaves differently).
-    f['inter'] = stats['rbis'] * stats['zcc']
+    for name, fn in DERIVED.items():
+        f[name] = fn(f)
     return f
+
+
+def _column(feat, c):
+    """Fetch a feature column, computing a known derived feature on demand if the
+    supplied feat dict predates it (guards against code/frozen-model version skew)."""
+    if c in feat:
+        return feat[c]
+    if c in DERIVED:
+        return DERIVED[c](feat)
+    raise KeyError(f"feature '{c}' is not available (known: {sorted(feat)})")
 
 
 def design_matrix(feat, cols):
     """Stack named feature columns + intercept."""
-    n = len(feat[cols[0]])
-    return np.column_stack([feat[c] for c in cols] + [np.ones(n)])
+    n = len(_column(feat, cols[0]))
+    return np.column_stack([_column(feat, c) for c in cols] + [np.ones(n)])
