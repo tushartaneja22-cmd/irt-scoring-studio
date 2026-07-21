@@ -95,10 +95,14 @@ def run_mock(path, model=None, prior_cfg=None, n_points=N_POINTS, n_min=N_MIN,
             gold_arr = gold.get((mock_id, subj)) if mock_id is not None else None
             applied = correct_subject(recs, gold_arr, mode=correction,
                                       strength=strength, n_min=n_min)
-        # per-student EAP ability + scaled score, on the engine's native trait metric
+        # per-student EAP ability + scaled score, on the engine's native trait metric.
+        # score_scale may be per-subject ({'rw': {...}, 'math': {...}}) or a flat dict.
         D = 1.702 if mode == 'xcalibre' else 1.0
+        subj_scale = score_scale
+        if isinstance(score_scale, dict) and subj in score_scale:
+            subj_scale = score_scale[subj]
         sc = score_subject(sd.responses, res.a, res.b, res.c, D=D,
-                           n_points=n_points, scale=score_scale)
+                           n_points=n_points, scale=subj_scale)
         scores = {
             'student_id': list(sd.student_ids), 'student_name': list(sd.student_names),
             'theta': [round(float(t), 3) for t in sc['theta']],

@@ -49,11 +49,20 @@ with st.sidebar:
                            '(common for lightly-taken adaptive modules).')
     with st.expander('Scaled-score scale'):
         st.caption('Section score = mean + sd·θ (θ standardised on N(0,1)), clamped to '
-                   '[200, 800] and rounded to 10. Norm-referenced — **not** the official '
-                   'College Board raw-to-scaled table.')
-        sc_mean = st.number_input('Section mean', 200, 800, 500, 10)
-        sc_sd = st.number_input('Section sd', 20, 200, 100, 5)
-    score_scale = {'mean': float(sc_mean), 'sd': float(sc_sd)}
+                   '[200, 800] and rounded to 10. Reading & Writing and Math are scored on '
+                   'separate traits, so each has its own scale. Norm-referenced — **not** the '
+                   'official College Board raw-to-scaled table.')
+        cA, cB = st.columns(2)
+        with cA:
+            st.markdown('**Reading & Writing**')
+            rw_mean = st.number_input('Mean', 200, 800, 500, 10, key='rw_mean')
+            rw_sd = st.number_input('SD', 20, 200, 100, 5, key='rw_sd')
+        with cB:
+            st.markdown('**Math**')
+            math_mean = st.number_input('Mean', 200, 800, 500, 10, key='math_mean')
+            math_sd = st.number_input('SD', 20, 200, 100, 5, key='math_sd')
+    score_scale = {'rw': {'mean': float(rw_mean), 'sd': float(rw_sd)},
+                   'math': {'mean': float(math_mean), 'sd': float(math_sd)}}
     with st.expander('Advanced (model priors)'):
         st.caption('MAP priors that stabilise small-sample estimation. Defaults reproduce '
                    'the reference calibration; change only if you know what you are doing.')
@@ -158,9 +167,12 @@ for up in uploads:
     # ----- scaled scores tab --------------------------------------------------
     with tabs[-1]:
         ss = scaled_scores_df(res, subjects)
-        st.caption(f'Per-student **EAP ability (θ)** from the calibrated 3PL items, mapped to '
-                   f'a section scale (mean {int(sc_mean)}, sd {int(sc_sd)}, clamped 200–800, '
-                   'rounded to 10). Norm-referenced — not the official College Board conversion.')
+        _lbl = {'rw': 'R&W', 'math': 'Math'}
+        scale_bits = '; '.join(f'{_lbl[s]} mean {int(score_scale[s]["mean"])} sd {int(score_scale[s]["sd"])}'
+                               for s in subjects)
+        st.caption(f'Per-student **EAP ability (θ)** from the calibrated 3PL items, mapped to a '
+                   f'section scale ({scale_bits}; clamped 200–800, rounded to 10). '
+                   'Norm-referenced — not the official College Board conversion.')
         main_col = 'Total (400–1600)' if 'Total (400–1600)' in ss else ss.columns[2]
         s1, s2, s3, s4 = st.columns(4)
         s1.metric('Students', len(ss))
