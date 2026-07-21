@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Generated calibration outputs (regenerable via validate_all.py / cli.py)
+output/
+output_link/
+output_xcalibre/
+
+# Raw student-response data and reference values are NOT committed to this
+# public repo. The app is upload-driven — provide these at runtime instead.
+Digital_SAT_Mock_Test_-*.csv
+A, B, C Values.xlsx
+
+# OS / editor
+.DS_Store
+Thumbs.db
