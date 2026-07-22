@@ -12,11 +12,17 @@ output_xcalibre/
 
 # xCalibre dev cache (rebuilt by engine/_xcal_cache.py)
 engine/_xcal_raw.npz
+# link-fit estimate cache (rebuilt by engine/_build_cache.py)
+engine/_acache.npz
 
 # Raw student-response data and reference values are NOT committed to this
 # public repo. The app is upload-driven — provide these at runtime instead.
 Digital_SAT_Mock_Test_-*.csv
 A, B, C Values.xlsx
+# per-mock ID-keyed reference JSON (a/b/c ground truth)
+[0-9][0-9][0-9].txt
+# generated per-mock a/b/c exports (may embed reference values)
+mock_*_abc*.csv
 
 # OS / editor
 .DS_Store

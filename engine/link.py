@@ -1,26 +1,53 @@
-"""Fit and apply the metric-link model that maps MML calibration output onto
-the reference (gold-standard) a/b/c metric.
+"""Fit and apply the metric-link model that maps calibration output onto the
+reference (ID-keyed) a/b/c metric.
 
 The link is a small linear model per subject family (rw / math):
     a_ref = w_a . [features_a, 1]
     b_ref = w_b . [features_b, 1]
     c_ref = w_c . [features_c, 1]
-Coefficients are estimated once on all available reference mocks and frozen to
-JSON, then applied to any new mock.
+Coefficients are estimated once on all reference mocks and frozen to JSON, then
+applied to any new mock.
+
+Feature columns for `a` are chosen per subject, because the two subjects behave
+differently:
+  * rw    — the reference couples discrimination to difficulty, so `a` is best
+            recovered from the MML slope plus classical discrimination proxies and
+            guessing-adjusted difficulty (`b`, `zpc`). All cheap, MML-only.
+  * math  — the reference discrimination ranking is recovered markedly better by
+            the xCalibre-faithful estimator (normal-ogive + floating priors), so
+            math `a` adds the `xc_a` feature. That requires running the xcalibre
+            engine for the math subject at inference (see pipeline.needs_xcalibre).
+`b` and `c` share one feature set across subjects.
 """
 import json
 import numpy as np
 from features import design_matrix
 
-# feature columns per parameter (shared across subjects; coefficients fit per subject).
-# `a` gains cheap classical discrimination proxies (biserial / point-biserial), which
-# recover more of the reference discrimination than the MML slope alone. `b` adds the
-# same discrimination signal plus a discrimination×difficulty interaction that sharpens
-# the tails. Both changes are leave-one-mock-out validated (honest, gold-free).
-A_COLS = ['a', 'rbis', 'rp']
+# per-subject `a` feature columns (see module docstring). 'a'/'b'/'c' are the MML
+# estimates; 'xc_a' is the xCalibre-faithful slope; the rest are classical stats.
+A_COLS = {
+    'rw':   ['a', 'rbis', 'rp', 'b', 'zpc'],
+    'math': ['a', 'xc_a'],
+}
+A_COLS_DEFAULT = ['a', 'rbis', 'rp']          # fallback for an unknown subject
 B_COLS = ['b', 'zcc', 'zcc3', 'zpc', 'rbis', 'rp', 'inter']
 C_COLS = ['c']
 B_CLIP = (-4.0, 4.0)   # reference difficulties are bounded at the tails
+
+
+def a_cols_for(subject, model=None):
+    """Feature columns used for `a` on this subject (model may override defaults)."""
+    if model is not None:
+        ac = model.get('a_cols', {})
+        if subject in ac:
+            return ac[subject]
+    return A_COLS.get(subject, A_COLS_DEFAULT)
+
+
+def needs_xcalibre(model, subject):
+    """True if this subject's `a` link references an xCalibre feature (xc_*),
+    so the pipeline must run the xcalibre engine for it."""
+    return any(str(c).startswith('xc_') for c in a_cols_for(subject, model))
 
 
 def fit_linear(feat_list, gold_list, cols):
@@ -33,16 +60,18 @@ def fit_linear(feat_list, gold_list, cols):
 
 def fit_link_model(samples):
     """samples: list of dicts {subject, feat, gold(a,b,c array)}.
-    Returns model dict with per-subject coefficients."""
-    model = {'a_cols': A_COLS, 'b_cols': B_COLS, 'c_cols': C_COLS,
+    Returns model dict with per-subject coefficients and the a-columns used."""
+    model = {'a_cols': {}, 'b_cols': B_COLS, 'c_cols': C_COLS,
              'b_clip': list(B_CLIP), 'subjects': {}}
     for subj in ('rw', 'math'):
         sub = [s for s in samples if s['subject'] == subj]
         if not sub:
             continue
         feats = [s['feat'] for s in sub]
+        acols = a_cols_for(subj)
+        model['a_cols'][subj] = acols
         model['subjects'][subj] = {
-            'a_w': fit_linear(feats, [s['gold'][:, 0] for s in sub], A_COLS),
+            'a_w': fit_linear(feats, [s['gold'][:, 0] for s in sub], acols),
             'b_w': fit_linear(feats, [s['gold'][:, 1] for s in sub], B_COLS),
             'c_w': fit_linear(feats, [s['gold'][:, 2] for s in sub], C_COLS),
         }
@@ -54,7 +83,7 @@ def apply_link(model, subject, feat):
     subject's coefficients if the requested subject was not fitted."""
     subj = subject if subject in model['subjects'] else next(iter(model['subjects']))
     coef = model['subjects'][subj]
-    a = design_matrix(feat, model['a_cols']) @ np.array(coef['a_w'])
+    a = design_matrix(feat, a_cols_for(subj, model)) @ np.array(coef['a_w'])
     b = design_matrix(feat, model['b_cols']) @ np.array(coef['b_w'])
     c = design_matrix(feat, model['c_cols']) @ np.array(coef['c_w'])
     # keep parameters in sane ranges

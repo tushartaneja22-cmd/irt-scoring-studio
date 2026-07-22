@@ -19,7 +19,13 @@ from gold import load_gold
 
 CSV = {os.path.basename(p).split('_-')[1].split('_')[0]: p
        for p in glob.glob('Digital_SAT_Mock_Test_-*.csv')}
-GOLD = load_gold()
+# Legacy tuner: used the positional Excel gold, now retired in favour of the
+# ID-keyed JSON reference (see refjson) and validate_loo.py. Kept for reference;
+# GOLD is empty if the old workbook is absent so importing this module never fails.
+try:
+    GOLD = load_gold()
+except FileNotFoundError:
+    GOLD = {}
 
 
 def calibrate_cache(prior, n_points, mocks):

@@ -4,16 +4,28 @@ import sys, os, glob, time
 import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'engine'))
 from pipeline import run_mock, N_MIN
-from gold import load_gold
+from loader import load_mock
+import refjson
 from report import write_results_xlsx, validation_table
 
 CSV = {os.path.basename(p).split('_-')[1].split('_')[0]: p
        for p in glob.glob('Digital_SAT_Mock_Test_-*.csv')}
-GOLD = load_gold()
 OUT = 'output'
 
 
+def build_gold():
+    """ID-aligned reference: (num,subj) -> (J,3) a,b,c in the loader's item order."""
+    gold = {}
+    for num in refjson.MOCKS:
+        if num not in CSV:
+            continue
+        for subj, sd in load_mock(CSV[num]).items():
+            gold[(num, subj)] = refjson.aligned_gold(num, subj, sd.qids)
+    return gold
+
+
 def main():
+    GOLD = build_gold()
     os.makedirs(OUT, exist_ok=True)
     pooled = {('rw', p): [[], []] for p in 'abc'}
     pooled.update({('math', p): [[], []] for p in 'abc'})

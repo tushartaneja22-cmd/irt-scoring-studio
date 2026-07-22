@@ -70,7 +70,11 @@ def run_mock(path, model=None, prior_cfg=None, n_points=N_POINTS, n_min=N_MIN,
             a, b, c = _apply_xcal_anchor(anchor, subj, res)
         else:
             res = calibrate_3pl(sd.responses, prior=prior, n_points=n_points)
-            feat = build_features(res, stats)
+            # the math `a` link uses the xCalibre-faithful slope; run that engine
+            # only for subjects whose link references an xc_* feature.
+            xc = (calibrate_xcalibre(sd.responses, n_points=n_points)
+                  if linkmod.needs_xcalibre(model, subj) else None)
+            feat = build_features(res, stats, xc=xc)
             a, b, c = linkmod.apply_link(model, subj, feat)
         recs = []
         for j, meta in enumerate(sd.items):

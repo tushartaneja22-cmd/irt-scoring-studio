@@ -29,11 +29,13 @@ like `S1_24667_(STANDARD)(reading_and_writing)` with `1`/`0`/`-` cells), the stu
 
 ## Two engines
 
-The reference workbook was produced by **xCalibre** (Assessment Systems Corp.). The studio
+The reference was produced by **xCalibre** (Assessment Systems Corp.). The studio
 offers two calibration engines:
 
 - **`link`** (default) — MML-EM 3PL on a fixed `N(0,1)` trait, then a learned metric link to
-  the reference scale. **Lowest held-out RMSE**, fast (~4 s/mock).
+  the reference scale. **Lowest held-out RMSE.** For the **Math** subject it also runs the
+  xcalibre engine and feeds its slope (`xc_a`) into the `a` link, which recovers the reference
+  Math discrimination markedly better (see Accuracy); RW stays MML-only. ~15–40 s/mock.
 - **`xcalibre`** — reproduces xCalibre's estimator conventions directly: normal-ogive
   **D = 1.702** discrimination metric, **floating (empirical-Bayes) priors** on `a` and `b`
   re-estimated each EM cycle, and a fixed guessing prior at `1/#options`, followed by a light
@@ -43,32 +45,53 @@ offers two calibration engines:
 
 Select with `--mode` on the CLI or the sidebar toggle in the app.
 
+## Reference format
+
+The ground-truth `a/b/c` are the per-mock **ID-keyed JSON exports** (`<mock-id>.txt`, e.g.
+`115.txt`), whose `questions[]` array carries each item's `question` id and `irt_a/irt_b/irt_c`.
+The studio aligns estimates to the reference **by question id**, so every item on every mock
+is used — no positional / dropped-item misalignment. (This replaced an earlier positional
+Excel workbook.) `engine/refjson.py` loads and aligns them.
+
 ## Accuracy (honest leave-one-mock-out cross-validation)
 
-Measured on well-administered items (≥50 students), holding each mock out and linking on
-the others — i.e. the accuracy expected on a **brand-new** mock:
+Holding each mock out and linking on the others — i.e. the accuracy expected on a
+**brand-new** mock. Measured against the ID-keyed JSON reference:
 
 | Parameter | Reading & Writing | Math |
 |-----------|------------------|------|
-| `b` difficulty | RMSE ≈ 0.43, r ≈ 0.96 | RMSE ≈ 0.44, r ≈ 0.94 |
-| `c` guessing   | RMSE ≈ 0.016 | RMSE ≈ 0.022 |
-| `a` discrimination | RMSE ≈ 0.14 | RMSE ≈ 0.21 |
+| `b` difficulty | r ≈ 0.93, RMSE ≈ 0.56 | r ≈ 0.87, RMSE ≈ 0.64 |
+| `c` guessing   | r ≈ 0.17, RMSE ≈ 0.033 | RMSE ≈ 0.051 |
+| `a` discrimination | **r ≈ 0.45, RMSE ≈ 0.157** | **r ≈ 0.39, RMSE ≈ 0.211** |
 
-**Link features.** The `b` link uses a **continuity-corrected, guessing-adjusted difficulty
-feature** (plus a cubic tail term and a ±4 clamp) so extreme easy/hard items still reach the
-reference's extreme difficulties. Both `a` and `b` also use **classical discrimination
-proxies** (biserial and point-biserial correlations), and `b` a discrimination×difficulty
-interaction. Adding these lifted the held-out `a` correlation markedly (rw r 0.40 → 0.50,
-math r 0.31 → 0.41) and trimmed rw `b` RMSE (0.442 → 0.430) — all leave-one-out validated,
-gold-free, at the same ~4 s/mock. We also tested ridge/robust regression and stacking the
-xCalibre engine's estimates as extra features: only math `a` improved from stacking, at ~10×
-runtime, so it was **not** adopted.
+(Well-administered items, ≥50 students. `python engine/cv.py` prints the full table.)
 
-`c` is essentially exact. `b` tracks the gold standard tightly. `a` is intrinsically hard to
-recover here because the reference `a` values are heavily shrunk (sd ≈ 0.12) — the calibrator
-matches their central tendency and the residual signal is small for everyone; the
-discrimination proxies recover as much of it as generalises. Lightly-taken adaptive modules
-(e.g. mock 117 Math's hard module, 12–17 takers) are flagged and unavoidably noisier.
+### The `a` link (per subject)
+
+Discrimination is the hard parameter — the reference `a` is heavily shrunk (sd ≈ 0.18 RW /
+0.22 Math), so much of it is prior, not item-level signal. The two subjects are recovered
+differently, so the `a` link now uses **per-subject features** (`engine/link.py`):
+
+- **Reading & Writing** — the reference couples discrimination to difficulty, so RW `a` is
+  best recovered from the MML slope plus classical discrimination proxies (biserial,
+  point-biserial) **and guessing-adjusted difficulty** (`b`, `zpc`). All cheap, MML-only.
+  Held-out `a` r **0.29 → 0.42**.
+- **Math** — the reference discrimination ranking is recovered markedly better by the
+  **xCalibre-faithful slope** (normal-ogive + floating priors), so Math `a` adds the `xc_a`
+  feature. The pipeline runs the xcalibre engine **for the Math subject only** at inference.
+  Held-out `a` r **0.28 → 0.40**.
+
+Both gains are leave-one-mock-out validated (honest, no gold-peeking) and stable across all
+six held-out mocks. `b` and `c` are unchanged.
+
+`c` is essentially at its floor (near-constant ≈ 0.25). `b` tracks the reference tightly.
+`a` matches ranking and central tendency; because the signal is weak the linked `a` is more
+shrunk than the reference (it minimises squared error rather than matching the spread), so
+the extreme-discrimination items are pulled toward the mean — an honest limit, not a bug.
+Lightly-taken adaptive modules (e.g. mock 120) are flagged and unavoidably noisier.
+
+**Runtime.** Because Math now also runs the xcalibre engine in `link` mode, a full mock takes
+~15–40 s (was ~4 s). RW stays fast (MML-only).
 
 ## Scaled scores
 
@@ -143,33 +166,39 @@ engine/
   loader.py      CSV -> response matrices (per subject)
   calibrate.py   3PL MML-EM calibrator (vectorised E-step, analytic-gradient M-step)
   xcalibre.py    xCalibre-faithful engine (normal-ogive D=1.702 + floating priors)
-  features.py    classical item statistics used by the link
-  link.py        fit / apply / save-load the metric-link model
+  features.py    classical item statistics + optional xCalibre features used by the link
+  link.py        fit / apply / save-load the metric-link model (per-subject `a` columns)
   link_model.json      frozen link coefficients (trained on mocks 115-120)
   xcalibre_anchor.json frozen 2-constant metric anchor for the xcalibre engine
   pipeline.py    calibrate -> link/anchor -> QC, per mock (mode= link | xcalibre)
+  refjson.py     load + ID-align the reference JSON (`<id>.txt`)
   report.py      Excel/CSV writers + validation metrics
   cli.py         batch command line
-  gold.py        read reference a/b/c workbook
-  tune.py, cv.py, fit_link.py   tuning / cross-validation / freezing utilities
+  fit_link.py    refit + freeze link_model.json (ID-aligned JSON reference)
+  cv.py / validate_loo.py   honest leave-one-mock-out validation
+  _build_cache.py           cache MML+xCalibre estimates for fast link experiments
+  gold.py, tune.py          retired (positional-Excel era; kept for reference)
 app/app.py       Streamlit UI
 validate_all.py  full run + accuracy report
+<id>.txt         per-mock ID-keyed reference (a/b/c by question id)
 output/          generated workbooks
 ```
 
 ## Extending to future mocks
 
-The pipeline needs **no gold standard** to score a new mock — just run it. The frozen link
+The pipeline needs **no reference** to score a new mock — just run it. The frozen link
 generalises (that is what the cross-validation measures). If you later obtain reference
-values for additional mocks and want to sharpen the link, drop them in, add their ids to
-`fit_link.py`, and re-run it to refresh `link_model.json`.
+values for additional mocks and want to sharpen the link, drop in their `<id>.txt` JSON
+exports, add the ids to `engine/refjson.py` (`MOCKS`), delete the stale `engine/_acache.npz`,
+and run `python engine/fit_link.py` to refresh `link_model.json`.
 
 ## Method notes / assumptions
 
 - Unidimensional 3PL per subject; concurrent calibration across Module 1 + both Module 2
   variants on one trait.
-- The reference workbook lists `a,b,c` in item-column order with no ids; positional
-  alignment holds only where the reference kept every item. Where it dropped thin items,
-  the studio still reports all items (flagged) but skips positional validation.
+- The reference JSON (`<id>.txt`) carries a `question` id per item, so estimates and
+  reference align **by id** — every item on every mock is validated, regardless of ordering.
 - `c` is priored at 0.25 (four-option multiple choice); adjust in the app sidebar if a form
-  uses a different option count.
+  uses a different option count. Note the reference calibrated **all** items (including Math
+  student-produced responses) with a guessing parameter ≈ 0.25 — i.e. 3PL throughout, not a
+  2PL/GRM for grid-ins — so the studio matches that convention deliberately.

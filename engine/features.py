@@ -54,10 +54,18 @@ DERIVED = {
 }
 
 
-def build_features(calib, stats):
-    """Return dict feature_name -> array, combining MML params and CTT stats."""
+def build_features(calib, stats, xc=None):
+    """Return dict feature_name -> array, combining MML params and CTT stats.
+
+    If `xc` (an xCalibre CalibResult) is supplied, its estimates are exposed as
+    `xc_a`/`xc_b`/`xc_c` features — used by the math `a` link, which recovers the
+    reference discrimination better from the xCalibre-faithful slope."""
     f = dict(a=calib.a, b=calib.b, c=calib.c)
     f.update({k: stats[k] for k in ('p', 'rp', 'zp', 'zpc', 'rbis', 'zcc', 'zcc3')})
+    if xc is not None:
+        f['xc_a'] = xc.a
+        f['xc_b'] = xc.b
+        f['xc_c'] = xc.c
     for name, fn in DERIVED.items():
         f[name] = fn(f)
     return f
