@@ -23,6 +23,20 @@ A, B, C Values.xlsx
 [0-9][0-9][0-9].txt
 # generated per-mock a/b/c exports (may embed reference values)
 mock_*_abc*.csv
+# generated scaled-score exports and lookup tables (carry student names/emails)
+mock_*scaled*.csv
+mock_*_final_*.csv
+mock_*_final_*.xlsx
+mock_*_correct_to_scaled*.csv
+mock_*_vs_xcalibre.*
+mock126_scores.csv
+# scored-session exports pulled back from the live API (names + emails)
+mock126_scaled.py
+*Scores*.csv
+*Scores.rtf
+Mock [0-9]*.csv
+# copy of the live Django scoring endpoint, kept locally for reference only
+irt.py
 
 # OS / editor
 .DS_Store

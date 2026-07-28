@@ -15,7 +15,7 @@ from features import classical_stats, build_features
 import link as linkmod
 from xcalibre import calibrate_xcalibre, XCalConfig
 from correction import correct_subject
-from scoring import score_subject
+from scoring import score_subject, score_subject_irt
 
 DEFAULT_PRIOR = dict(c0=0.25, mu_a=float(np.log(0.80)), sd_a=0.25, sd_g=0.25, sd_d=4.0)
 N_POINTS = 61
@@ -99,21 +99,28 @@ def run_mock(path, model=None, prior_cfg=None, n_points=N_POINTS, n_min=N_MIN,
             gold_arr = gold.get((mock_id, subj)) if mock_id is not None else None
             applied = correct_subject(recs, gold_arr, mode=correction,
                                       strength=strength, n_min=n_min)
-        # per-student EAP ability + scaled score, on the engine's native trait metric.
+        # Per-student ability + scaled score, using the SAME a/b/c reported above
+        # (not the raw calibration output) and the live endpoint's scorer.
         # score_scale may be per-subject ({'rw': {...}, 'math': {...}}) or a flat dict.
-        D = 1.702 if mode == 'xcalibre' else 1.0
         subj_scale = score_scale
         if isinstance(score_scale, dict) and subj in score_scale:
             subj_scale = score_scale[subj]
-        sc = score_subject(sd.responses, res.a, res.b, res.c, D=D,
-                           n_points=n_points, scale=subj_scale)
+        subj_scale = dict(subj_scale or {})
+        a_s = np.array([it['a'] for it in recs], float)
+        b_s = np.array([it['b'] for it in recs], float)
+        c_s = np.array([it['c'] for it in recs], float)
+        sc = score_subject_irt(sd.responses, a_s, b_s, c_s,
+                               mean=subj_scale.get('mean', 500.0),
+                               sd=subj_scale.get('sd', 100.0),
+                               floor=subj_scale.get('floor'),
+                               blanks_wrong=subj_scale.get('blanks_wrong', True))
         scores = {
             'student_id': list(sd.student_ids), 'student_name': list(sd.student_names),
-            'theta': [round(float(t), 3) for t in sc['theta']],
-            'se': [round(float(s), 3) for s in sc['se']],
+            'theta': [round(float(t), 2) for t in sc['theta']],
             'scaled': [int(v) for v in sc['scaled']],
             'n_answered': [int(v) for v in sc['n_answered']],
             'n_correct': [int(v) for v in sc['n_correct']],
+            'n_blank': [int(v) for v in sc['n_blank']],
         }
         out[subj] = {
             'items': recs,

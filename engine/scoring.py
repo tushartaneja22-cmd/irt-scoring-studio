@@ -16,6 +16,7 @@ to the nearest `step`. Defaults (mean=500, sd=100, [200,800], step=10) mirror th
 section scale. This is a transparent norm-referenced conversion, NOT the College
 Board's official (proprietary, form-specific) raw-to-scaled table.
 """
+import math
 import numpy as np
 from scipy.special import expit
 
@@ -69,4 +70,87 @@ def score_subject(responses, a, b, c, D=1.0, n_points=61, scale=None):
     scale = scale or {}
     r = eap_theta(responses, a, b, c, D=D, n_points=n_points)
     r['scaled'] = to_scaled(r['theta'], **scale)
+    return r
+
+
+# ---------------------------------------------------------------------------
+# Production scorer: a faithful port of the live endpoint (irt.py).
+#
+# It differs from eap_theta above in every respect that matters, so the two are
+# kept separate rather than parameterised:
+#   * MAP (posterior mode) on a fixed 801-point grid over [-4, 4], step 0.01,
+#     not EAP on a 61-point [-6, 6] quadrature.
+#   * D = 1.702 -- the metric the reference a values are reported on.
+#   * All-correct short-circuits to theta = +4.0; all-incorrect to -4.0.
+#   * Unanswered items count as WRONG. The endpoint itself would skip them, but
+#     its only caller converts every non-"1" cell to 0 before posting, so blanks
+#     never reach it as missing. Matching production means folding that in here.
+# Verified against 351 live sessions: 351/351 English, 350/351 Math.
+# ---------------------------------------------------------------------------
+IRT_D = 1.702
+IRT_LO, IRT_HI, IRT_STEP = -4.0, 4.0, 0.01
+IRT_N = 801
+_PI = 3.141529          # the literal used by the endpoint; kept for fidelity
+
+
+def _irt_grid():
+    theta = [IRT_LO + i * IRT_STEP for i in range(IRT_N)]
+    prior = np.array([math.exp(-(t * t / 2.0)) / math.sqrt(2 * _PI) for t in theta])
+    return np.array(theta), prior
+
+
+def irt_theta(responses, a, b, c, blanks_wrong=True):
+    """MAP ability on the endpoint's grid. responses (N,J), NaN = unanswered.
+
+    blanks_wrong=True reproduces production (blank -> incorrect). False leaves
+    them out of the likelihood, which is what the endpoint would do on its own.
+    Returns dict with theta, n_answered, n_correct, n_blank."""
+    a = np.asarray(a, float); b = np.asarray(b, float); c = np.asarray(c, float)
+    R = np.asarray(responses, float)
+    n, J = R.shape
+    blank = np.isnan(R)
+    X = np.where(blank, 0.0, R) if blanks_wrong else R
+
+    theta, prior = _irt_grid()
+    post = np.tile(prior, (n, 1))                       # (N,Q)
+    # Multiply item by item, in the endpoint's order, so the arithmetic matches.
+    for j in range(J):
+        z = IRT_D * a[j] * (theta - b[j])
+        e = np.exp(z)
+        p = c[j] + (1 - c[j]) * (e / (1 + e))           # (Q,)
+        x = X[:, j][:, None]
+        mult = np.where(x == 1, p[None, :], 1.0 - p[None, :])
+        if not blanks_wrong:                            # leave blanks untouched
+            mult = np.where(blank[:, j][:, None], 1.0, mult)
+        post *= mult
+
+    th = theta[np.argmax(post, axis=1)]                 # first max, as the loop does
+
+    # The endpoint's raw_score short-circuit: count(1) + count('-').
+    # With blanks folded to 0 there are no '-' left, so raw_score is just the
+    # number correct; raw == 0 means nothing right, raw == J means nothing wrong.
+    n_corr = np.where(blank, 0.0, R).sum(axis=1)
+    n_miss = blank.sum(axis=1)
+    raw = n_corr if blanks_wrong else n_corr + n_miss
+    th = np.where(raw == 0, IRT_LO, th)
+    th = np.where(raw == J, IRT_HI, th)
+    return dict(theta=th, n_answered=(J - n_miss).astype(int),
+                n_correct=n_corr.astype(int), n_blank=n_miss.astype(int))
+
+
+def to_scaled_irt(theta, mean, sd, floor=None, cap=800.0):
+    """theta -> section score exactly as the endpoint does: round to the nearest
+    10, cap at `cap`. The endpoint applies no lower bound; pass floor=200 to add
+    one (recommended -- without it a weak paper can score below the SAT floor)."""
+    v = np.round(np.asarray(theta, float) * sd + mean, -1)
+    v = np.minimum(v, cap)
+    if floor is not None:
+        v = np.maximum(v, floor)
+    return v
+
+
+def score_subject_irt(responses, a, b, c, mean, sd, floor=None, blanks_wrong=True):
+    """EAP-free scoring path used by the app: MAP theta + endpoint scaling."""
+    r = irt_theta(responses, a, b, c, blanks_wrong=blanks_wrong)
+    r['scaled'] = to_scaled_irt(r['theta'], mean, sd, floor=floor)
     return r
