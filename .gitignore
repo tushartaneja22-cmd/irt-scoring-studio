@@ -48,6 +48,7 @@ Mock [0-9]*.csv
 # copy of the live Django scoring endpoint, kept locally for reference only
 irt.py
 
-# OS / editor
+# OS / editor / local tooling
 .DS_Store
 Thumbs.db
+.claude/
