@@ -86,6 +86,12 @@ def score_subject(responses, a, b, c, D=1.0, n_points=61, scale=None):
 #     its only caller converts every non-"1" cell to 0 before posting, so blanks
 #     never reach it as missing. Matching production means folding that in here.
 # Verified against 351 live sessions: 351/351 English, 350/351 Math.
+#
+# On an adaptive form the website posts only the module-2 variant the student was
+# routed to, so items from the other variant never reach the endpoint at all.
+# Pass `administered` to reproduce that: un-administered items are excluded from
+# the likelihood and from the perfect/zero short-circuit regardless of
+# `blanks_wrong`, which governs genuine omits only.
 # ---------------------------------------------------------------------------
 IRT_D = 1.702
 IRT_LO, IRT_HI, IRT_STEP = -4.0, 4.0, 0.01
@@ -99,17 +105,24 @@ def _irt_grid():
     return np.array(theta), prior
 
 
-def irt_theta(responses, a, b, c, blanks_wrong=True):
-    """MAP ability on the endpoint's grid. responses (N,J), NaN = unanswered.
+def irt_theta(responses, a, b, c, blanks_wrong=True, administered=None):
+    """MAP ability on the endpoint's grid. responses (N,J), NaN = no response.
 
-    blanks_wrong=True reproduces production (blank -> incorrect). False leaves
-    them out of the likelihood, which is what the endpoint would do on its own.
-    Returns dict with theta, n_answered, n_correct, n_blank."""
+    administered (N,J) bool marks the items each student was actually presented;
+    None means all of them (a fixed form). Items not administered are missing by
+    design -- they never enter the likelihood and never count toward a perfect or
+    zero paper.
+
+    blanks_wrong=True reproduces production for the items a student DID see
+    (blank -> incorrect). False leaves those omits out of the likelihood too.
+    Returns dict with theta, n_seen, n_answered, n_correct, n_blank."""
     a = np.asarray(a, float); b = np.asarray(b, float); c = np.asarray(c, float)
     R = np.asarray(responses, float)
     n, J = R.shape
-    blank = np.isnan(R)
-    X = np.where(blank, 0.0, R) if blanks_wrong else R
+    adm = np.ones((n, J), bool) if administered is None else np.asarray(administered, bool)
+    no_resp = np.isnan(R)
+    blank = no_resp & adm                               # presented, left blank
+    X = np.where(no_resp, 0.0, R) if blanks_wrong else R
 
     theta, prior = _irt_grid()
     post = np.tile(prior, (n, 1))                       # (N,Q)
@@ -120,22 +133,24 @@ def irt_theta(responses, a, b, c, blanks_wrong=True):
         p = c[j] + (1 - c[j]) * (e / (1 + e))           # (Q,)
         x = X[:, j][:, None]
         mult = np.where(x == 1, p[None, :], 1.0 - p[None, :])
-        if not blanks_wrong:                            # leave blanks untouched
-            mult = np.where(blank[:, j][:, None], 1.0, mult)
+        # never administered is always skipped; blanks only when asked
+        skip = ~adm[:, j] if blanks_wrong else (~adm[:, j] | blank[:, j])
+        mult = np.where(skip[:, None], 1.0, mult)
         post *= mult
 
     th = theta[np.argmax(post, axis=1)]                 # first max, as the loop does
 
-    # The endpoint's raw_score short-circuit: count(1) + count('-').
-    # With blanks folded to 0 there are no '-' left, so raw_score is just the
-    # number correct; raw == 0 means nothing right, raw == J means nothing wrong.
-    n_corr = np.where(blank, 0.0, R).sum(axis=1)
-    n_miss = blank.sum(axis=1)
-    raw = n_corr if blanks_wrong else n_corr + n_miss
+    # The endpoint's raw_score short-circuit, evaluated over the items the student
+    # was presented: raw == 0 means nothing right, raw == n_seen nothing wrong.
+    n_corr = np.where(no_resp, 0.0, R).sum(axis=1)
+    n_blank = blank.sum(axis=1)
+    n_seen = adm.sum(axis=1)
+    raw = n_corr if blanks_wrong else n_corr + n_blank
     th = np.where(raw == 0, IRT_LO, th)
-    th = np.where(raw == J, IRT_HI, th)
-    return dict(theta=th, n_answered=(J - n_miss).astype(int),
-                n_correct=n_corr.astype(int), n_blank=n_miss.astype(int))
+    th = np.where((n_seen > 0) & (raw == n_seen), IRT_HI, th)
+    return dict(theta=th, n_seen=n_seen.astype(int),
+                n_answered=(n_seen - n_blank).astype(int),
+                n_correct=n_corr.astype(int), n_blank=n_blank.astype(int))
 
 
 def to_scaled_irt(theta, mean, sd, floor=None, cap=800.0):
@@ -149,8 +164,10 @@ def to_scaled_irt(theta, mean, sd, floor=None, cap=800.0):
     return v
 
 
-def score_subject_irt(responses, a, b, c, mean, sd, floor=None, blanks_wrong=True):
+def score_subject_irt(responses, a, b, c, mean, sd, floor=None, blanks_wrong=True,
+                      administered=None):
     """EAP-free scoring path used by the app: MAP theta + endpoint scaling."""
-    r = irt_theta(responses, a, b, c, blanks_wrong=blanks_wrong)
+    r = irt_theta(responses, a, b, c, blanks_wrong=blanks_wrong,
+                  administered=administered)
     r['scaled'] = to_scaled_irt(r['theta'], mean, sd, floor=floor)
     return r

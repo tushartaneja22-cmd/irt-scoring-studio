@@ -14,10 +14,14 @@ output_xcalibre/
 engine/_xcal_raw.npz
 # link-fit estimate cache (rebuilt by engine/_build_cache.py)
 engine/_acache.npz
+# local-only xCalibre report readers (parse .rtf exports kept outside the repo)
+engine/xcal_report.py
+engine/_read_xcal_rtf.py
 
 # Raw student-response data and reference values are NOT committed to this
 # public repo. The app is upload-driven — provide these at runtime instead.
-Digital_SAT_Mock_Test_-*.csv
+# Covers every export shape: Mock Test, Diagnostic Test, etc.
+Digital_SAT_*.csv
 A, B, C Values.xlsx
 # per-mock ID-keyed reference JSON (a/b/c ground truth)
 [0-9][0-9][0-9].txt
@@ -30,6 +34,12 @@ mock_*_final_*.xlsx
 mock_*_correct_to_scaled*.csv
 mock_*_vs_xcalibre.*
 mock126_scores.csv
+# generated workbooks from any source form — the Scaled scores sheet carries
+# student names, so match on the output shape rather than the `mock_` prefix
+diagnostic_*.csv
+diagnostic_*.xlsx
+*_irt_scaled_*.csv
+*_irt_scaled_*.xlsx
 # scored-session exports pulled back from the live API (names + emails)
 mock126_scaled.py
 *Scores*.csv

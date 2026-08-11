@@ -113,11 +113,13 @@ def run_mock(path, model=None, prior_cfg=None, n_points=N_POINTS, n_min=N_MIN,
                                mean=subj_scale.get('mean', 500.0),
                                sd=subj_scale.get('sd', 100.0),
                                floor=subj_scale.get('floor'),
-                               blanks_wrong=subj_scale.get('blanks_wrong', True))
+                               blanks_wrong=subj_scale.get('blanks_wrong', True),
+                               administered=sd.administered)
         scores = {
             'student_id': list(sd.student_ids), 'student_name': list(sd.student_names),
             'theta': [round(float(t), 2) for t in sc['theta']],
             'scaled': [int(v) for v in sc['scaled']],
+            'n_seen': [int(v) for v in sc['n_seen']],
             'n_answered': [int(v) for v in sc['n_answered']],
             'n_correct': [int(v) for v in sc['n_correct']],
             'n_blank': [int(v) for v in sc['n_blank']],
@@ -129,5 +131,18 @@ def run_mock(path, model=None, prior_cfg=None, n_points=N_POINTS, n_min=N_MIN,
             'converged': res.converged,
             'correction': f'{correction}@{strength:.2f}' if applied else 'off',
             'scores': scores,
+            'form': form_info(sd),
         }
     return out
+
+
+def form_info(sd):
+    """How this subject was delivered -- adaptive routing is decided per subject,
+    so one file can be adaptive in Reading & Writing and fixed in Math."""
+    return {
+        'adaptive': sd.is_adaptive,
+        'n_items': sd.n_items,          # every item in the pool
+        'form_size': sd.form_size,      # items on one student's form
+        'variants': list(sd.variants),  # module-2 sections students route between
+        'routing': round(float(sd.routing), 4),
+    }

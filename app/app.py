@@ -19,8 +19,10 @@ import streamlit as st
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'engine'))
 from pipeline import run_mock, DEFAULT_PRIOR, N_POINTS, N_MIN, LINK_PATH
-from tables import SUBJ_LABEL, SHORT, all_tables, build_xlsx
+from tables import SUBJ_LABEL, SHORT, all_tables, build_xlsx, form_df
 import link as linkmod
+
+ROUTING_MIN = 0.90      # below this the ADAPTIVE labels don't match the responses
 
 st.set_page_config(page_title='IRT Scoring Studio', page_icon='📊', layout='wide')
 st.markdown("""
@@ -59,7 +61,10 @@ with st.sidebar:
     blanks_wrong = st.toggle('Unanswered items count as wrong', value=True,
                              help='Production behaviour: the client converts every non-"1" '
                                   'cell to 0 before scoring. Turning this off scores students '
-                                  'only on what they attempted, which inflates incomplete papers.')
+                                  'only on what they attempted, which inflates incomplete papers. '
+                                  'This applies to items a student was actually shown — on an '
+                                  'adaptive form the module-2 variant they were not routed to is '
+                                  'always excluded, either way.')
 
     with st.expander('Advanced'):
         mode = st.radio('Calibration engine', ['link', 'xcalibre'],
@@ -121,6 +126,7 @@ for up in uploads:
             continue
 
     subjects, items, scores, bands = all_tables(res)
+    forms = form_df(res, subjects)
     main = 'Total' if 'Total' in scores else f'{SHORT[subjects[0]]} score'
 
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -130,8 +136,46 @@ for up in uploads:
     k4.metric('Median', f'{scores[main].median():.0f}')
     k5.metric('Incomplete papers', int((scores['Incomplete'] == 'yes').sum()))
 
+    # ----- how this form was delivered ---------------------------------------
+    # Adaptivity is decided per subject: a paper is routinely adaptive in one
+    # subject and fixed in the other, so say which is which rather than
+    # describing the file as a whole.
+    adaptive = [s for s in subjects if res[s]['form']['adaptive']]
+    fixed = [s for s in subjects if not res[s]['form']['adaptive']]
+    def _phrase(ss):
+        return ' and '.join(SUBJ_LABEL[s] for s in ss)
+    if adaptive:
+        detail = ' · '.join(
+            f"{SUBJ_LABEL[s]} {res[s]['form']['form_size']} of "
+            f"{res[s]['form']['n_items']} items per student "
+            f"({len(res[s]['form']['variants'])} module-2 variants)"
+            for s in adaptive)
+        st.info(f'**Adaptive: {_phrase(adaptive)}**'
+                + (f' · Fixed: {_phrase(fixed)}' if fixed else '')
+                + f'  \n{detail}. Items a student was never routed to are excluded '
+                  'from scoring rather than counted wrong.')
+    else:
+        st.success(f'**Fixed form** — every student saw all {len(items)} items '
+                   f'({_phrase(subjects)}). No adaptive routing detected.')
+
+    bad = [s for s in adaptive if res[s]['form']['routing'] < ROUTING_MIN]
+    if bad:
+        st.warning(
+            'Routing check failed for ' + _phrase(bad) + ': only '
+            + ', '.join(f"{res[s]['form']['routing']:.0%}" for s in bad)
+            + ' of students answered inside exactly one module-2 variant. The '
+              'export labels these items ADAPTIVE but they were not delivered that '
+              'way, so treat the scores as provisional.')
+
+    with st.expander('Form structure'):
+        st.dataframe(forms, use_container_width=True, hide_index=True)
+        st.caption('`routing check` is the share of students who responded inside '
+                   'exactly one module-2 variant — it should be at or near 100% on a '
+                   'genuine adaptive form. `students below form size` counts papers '
+                   'that ended early.')
+
     st.download_button('⬇️ Download everything (Excel)',
-                       build_xlsx(items, scores, bands),
+                       build_xlsx(items, scores, bands, form=forms),
                        file_name=f'mock_{mock_id}_irt.xlsx', key=f'xl_{up.name}',
                        type='primary')
 
@@ -168,8 +212,10 @@ for up in uploads:
         cols = st.columns(len(bands))
         for col, (s, b) in zip(cols, bands):
             with col:
-                st.markdown(f'**{SUBJ_LABEL[s]}** — {res[s]["n_students"]} students, '
-                            f'{len(res[s]["items"])} items')
+                f = res[s]['form']
+                n_it = (f'{f["form_size"]} of {f["n_items"]} items'
+                        if f['adaptive'] else f'{f["n_items"]} items')
+                st.markdown(f'**{SUBJ_LABEL[s]}** — {res[s]["n_students"]} students, {n_it}')
                 st.dataframe(b[['correct', 'students', 'range', 'typical']],
                              use_container_width=True, height=460, hide_index=True)
 

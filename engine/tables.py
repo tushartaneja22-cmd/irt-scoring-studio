@@ -25,7 +25,11 @@ def items_df(res, subjects):
 
 
 def scores_df(res, subjects):
-    """One row per student: theta, section scores, total, correct + blank counts."""
+    """One row per student: theta, section scores, total, correct + blank counts.
+
+    `blank` counts only items the student was presented and left blank. On an
+    adaptive subject a `seen` column also appears, because the module-2 variant a
+    student was not routed to is neither answered nor blank -- it was never asked."""
     base = res[subjects[0]]['scores']
     out = {'Id': base['student_id'], 'Name': base['student_name']}
     total = np.zeros(len(base['student_id']), int)
@@ -34,6 +38,8 @@ def scores_df(res, subjects):
         out[f'{SHORT[s]} theta'] = sc['theta']
         out[f'{SHORT[s]} score'] = sc['scaled']
         out[f'{SHORT[s]} correct'] = sc['n_correct']
+        if res[s].get('form', {}).get('adaptive'):
+            out[f'{SHORT[s]} seen'] = sc['n_seen']
         out[f'{SHORT[s]} blank'] = sc['n_blank']
         total += np.array(sc['scaled'], int)
     if len(subjects) > 1:
@@ -59,11 +65,34 @@ def band_df(scores, subj):
     })
 
 
-def build_xlsx(items, scores, bands):
-    """One workbook: ABC values, Scaled scores, and a band sheet per subject."""
+def form_df(res, subjects):
+    """How each subject was delivered. Adaptivity is per subject: a form is often
+    adaptive in Reading & Writing and fixed in Math, or the reverse."""
+    rows = []
+    for s in subjects:
+        f = res[s].get('form', {})
+        seen = np.array(res[s]['scores']['n_seen'])
+        rows.append({
+            'subject': SUBJ_LABEL[s],
+            'delivery': 'Adaptive' if f.get('adaptive') else 'Fixed',
+            'items in pool': f.get('n_items', len(res[s]['items'])),
+            'items per student': f.get('form_size', ''),
+            'module 2 variants': len(f.get('variants', [])),
+            'variant sections': ', '.join(f.get('variants', [])),
+            'routing check': f"{f.get('routing', 1.0):.1%}" if f.get('adaptive') else '',
+            'students below form size': int((seen < f.get('form_size', 0)).sum()),
+        })
+    return pd.DataFrame(rows)
+
+
+def build_xlsx(items, scores, bands, form=None):
+    """One workbook: ABC values, Scaled scores, a band sheet per subject, and --
+    when supplied -- a Form sheet recording how each subject was delivered."""
     buf = io.BytesIO()
     sheets = [('ABC values', items), ('Scaled scores', scores)]
     sheets += [(f'{SHORT[s]} band', b) for s, b in bands]
+    if form is not None:
+        sheets.append(('Form', form))
     with pd.ExcelWriter(buf, engine='openpyxl') as xl:
         for nm, df in sheets:
             df.to_excel(xl, sheet_name=nm, index=False)
